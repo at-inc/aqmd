@@ -18,6 +18,13 @@ import {
 import { homedir } from "os";
 import { join } from "path";
 import { existsSync, mkdirSync, statSync, unlinkSync, readdirSync, readFileSync, writeFileSync } from "fs";
+import {
+  isRemoteEmbeddingEnabled,
+  isRemoteRerankEnabled,
+  remoteEmbed,
+  remoteEmbedBatch,
+  remoteRerank,
+} from "./remote-providers.js";
 
 // =============================================================================
 // Embedding Formatting Functions
@@ -770,6 +777,12 @@ export class LlamaCpp implements LLM {
    * Returns tokenizer tokens (opaque type from node-llama-cpp)
    */
   async tokenize(text: string): Promise<readonly LlamaToken[]> {
+    // AQMD: when using remote embedding, avoid loading local model; use char approximation
+    if (isRemoteEmbeddingEnabled()) {
+      const approxTokenCount = Math.ceil(text.length / 4);
+      return Array.from({ length: approxTokenCount }) as unknown as readonly LlamaToken[];
+    }
+
     await this.ensureEmbedContext();  // Ensure model is loaded
     if (!this.embedModel) {
       throw new Error("Embed model not loaded");
@@ -777,10 +790,11 @@ export class LlamaCpp implements LLM {
     return this.embedModel.tokenize(text);
   }
 
-  /**
-   * Count tokens in text using the embedding model's tokenizer
-   */
   async countTokens(text: string): Promise<number> {
+    // AQMD: char-based approximation when using remote embedding
+    if (isRemoteEmbeddingEnabled()) {
+      return Math.ceil(text.length / 4);
+    }
     const tokens = await this.tokenize(text);
     return tokens.length;
   }
@@ -789,6 +803,10 @@ export class LlamaCpp implements LLM {
    * Detokenize token IDs back to text
    */
   async detokenize(tokens: readonly LlamaToken[]): Promise<string> {
+    // AQMD: not available with remote embedding
+    if (isRemoteEmbeddingEnabled()) {
+      return "";
+    }
     await this.ensureEmbedContext();
     if (!this.embedModel) {
       throw new Error("Embed model not loaded");
@@ -801,6 +819,11 @@ export class LlamaCpp implements LLM {
   // ==========================================================================
 
   async embed(text: string, options: EmbedOptions = {}): Promise<EmbeddingResult | null> {
+    // AQMD: delegate to remote Gemini embedding when API key is set
+    if (isRemoteEmbeddingEnabled()) {
+      return remoteEmbed(text, options);
+    }
+
     // Ping activity at start to keep models alive during this operation
     this.touchActivity();
 
@@ -823,6 +846,11 @@ export class LlamaCpp implements LLM {
    * Uses Promise.all for parallel embedding - node-llama-cpp handles batching internally
    */
   async embedBatch(texts: string[]): Promise<(EmbeddingResult | null)[]> {
+    // AQMD: delegate to remote Gemini batch embedding when API key is set
+    if (isRemoteEmbeddingEnabled()) {
+      return remoteEmbedBatch(texts);
+    }
+
     // Ping activity at start to keep models alive during this operation
     this.touchActivity();
 
@@ -1030,6 +1058,11 @@ export class LlamaCpp implements LLM {
     documents: RerankDocument[],
     options: RerankOptions = {}
   ): Promise<RerankResult> {
+    // AQMD: delegate to remote ZeroEntropy reranking when API key is set
+    if (isRemoteRerankEnabled()) {
+      return remoteRerank(query, documents);
+    }
+
     // Ping activity at start to keep models alive during this operation
     this.touchActivity();
 

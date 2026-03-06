@@ -12,9 +12,11 @@ texts/
 !README.md
 !CLAUDE.md
 !CHANGELOG.md
+!changes-from-qmd.md
 !skills/**/*.md
 !finetune/*.md
 !docs/*.md
 finetune/outputs/
 finetune/data/train/
 .claude/
+.env

@@ -1,3 +1,13 @@
+# AQMD
+
+This is the fork of `qmd`. MAKE SURE THAT:
+- ALWAYS write changes to `changes-from-qmd.md` when you write a code. this is to track divergent history from `qmd` upstream.
+- ALWAYS read `changes-from-qmd.md` when you do 1) upstream merge/update or 2) implement a features
+- write code in a way that will less likely to involve merge conflicts with QMD. (e.g. write logics in other file, minimize edits of original file in a way for less merge conflict)
+
+---
+
+
 # QMD - Query Markup Documents
 
 Use Bun instead of Node.js (`bun` not `node`, `bun install` not `npm install`).
