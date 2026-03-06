@@ -1,8 +1,10 @@
-# QMD - Query Markup Documents
+# AQMD - Query Markup Documents
+
+> Fork of [QMD](https://github.com/tobi/qmd) with remote API provider support. See [changes-from-qmd.md](changes-from-qmd.md) for divergence details.
 
 An on-device search engine for everything you need to remember. Index your markdown notes, meeting transcripts, documentation, and knowledge bases. Search with keywords or natural language. Ideal for your agentic flows.
 
-QMD combines BM25 full-text search, vector semantic search, and LLM re-ranking—all running locally via node-llama-cpp with GGUF models.
+AQMD combines BM25 full-text search, vector semantic search, and LLM re-ranking. It supports both **local GGUF models** (via node-llama-cpp) and **remote API providers** (Gemini embedding + ZeroEntropy reranking), selected via environment variables.
 
 ![QMD Architecture](assets/qmd-architecture.png)
 
@@ -186,8 +188,8 @@ Point any MCP client at `http://localhost:8181/mcp` to connect.
                                       ▼
                           ┌───────────────────────┐
                           │    LLM Re-ranking     │
-                          │  (qwen3-reranker)     │
-                          │  Yes/No + logprobs    │
+                          │ (local qwen3-reranker │
+                          │  or ZeroEntropy API)  │
                           └───────────┬───────────┘
                                       │
                                       ▼
@@ -248,15 +250,17 @@ The `query` command uses **Reciprocal Rank Fusion (RRF)** with position-aware bl
 
 ### GGUF Models (via node-llama-cpp)
 
-QMD uses three local GGUF models (auto-downloaded on first use):
+When using **local models** (default, no env vars set), AQMD uses three GGUF models (auto-downloaded on first use):
 
-| Model | Purpose | Size |
-|-------|---------|------|
-| `embeddinggemma-300M-Q8_0` | Vector embeddings | ~300MB |
-| `qwen3-reranker-0.6b-q8_0` | Re-ranking | ~640MB |
-| `qmd-query-expansion-1.7B-q4_k_m` | Query expansion (fine-tuned) | ~1.1GB |
+| Model | Purpose | Size | Remote Alternative |
+|-------|---------|------|--------------------|
+| `embeddinggemma-300M-Q8_0` | Vector embeddings | ~300MB | Gemini `embedding-001` |
+| `qwen3-reranker-0.6b-q8_0` | Re-ranking | ~640MB | ZeroEntropy `zerank-2` |
+| `qmd-query-expansion-1.7B-q4_k_m` | Query expansion (fine-tuned) | ~1.1GB | *(local only)* |
 
 Models are downloaded from HuggingFace and cached in `~/.cache/qmd/models/`.
+
+> **Remote mode**: When `GOOGLE_GENERATIVE_AI_API_KEY` and/or `ZEROENTROPY_API_KEY` are set, the corresponding remote providers are used instead. The local embedding and reranking models are not downloaded or loaded. Query expansion always uses the local model.
 
 ## Installation
 
@@ -269,8 +273,8 @@ bun install -g @tobilu/qmd
 ### Development
 
 ```sh
-git clone https://github.com/tobi/qmd
-cd qmd
+git clone https://github.com/at-inc/aqmd
+cd aqmd
 npm install
 npm link
 ```
@@ -489,7 +493,11 @@ llm_cache       -- Cached LLM responses (query expansion, rerank scores)
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `GOOGLE_GENERATIVE_AI_API_KEY` | *(unset)* | Gemini API key — enables remote embedding via `embedding-001` (768 dimensions) |
+| `ZEROENTROPY_API_KEY` | *(unset)* | ZeroEntropy API key — enables remote reranking via `zerank-2` |
 | `XDG_CACHE_HOME` | `~/.cache` | Cache directory location |
+
+When remote API keys are set, the corresponding local GGUF models are bypassed entirely. You can set one or both — they activate independently.
 
 ## How It Works
 
@@ -513,8 +521,8 @@ Collection ──► Glob Pattern ──► Markdown Files ──► Parse Title
 Documents are chunked into ~900-token pieces with 15% overlap using smart boundary detection:
 
 ```
-Document ──► Smart Chunk (~900 tokens) ──► Format each chunk ──► node-llama-cpp ──► Store Vectors
-                │                           "title | text"        embedBatch()
+Document ──► Smart Chunk (~900 tokens) ──► Format each chunk ──► Embed Provider ──► Store Vectors
+                │                           "title | text"       (local or Gemini)
                 │
                 └─► Chunks stored with:
                     - hash: document hash
@@ -593,6 +601,8 @@ Query ──► LLM Expansion ──► [Original, Variant 1, Variant 2]
 
 ## Model Configuration
 
+### Local Models (default)
+
 Models are configured in `src/llm.ts` as HuggingFace URIs:
 
 ```typescript
@@ -601,7 +611,7 @@ const DEFAULT_RERANK_MODEL = "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-re
 const DEFAULT_GENERATE_MODEL = "hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf";
 ```
 
-### EmbeddingGemma Prompt Format
+#### EmbeddingGemma Prompt Format
 
 ```
 // For queries
@@ -611,13 +621,24 @@ const DEFAULT_GENERATE_MODEL = "hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query
 "title: {title} | text: {content}"
 ```
 
-### Qwen3-Reranker
+#### Qwen3-Reranker
 
 Uses node-llama-cpp's `createRankingContext()` and `rankAndSort()` API for cross-encoder reranking. Returns documents sorted by relevance score (0.0 - 1.0).
 
-### Qwen3 (Query Expansion)
+#### Qwen3 (Query Expansion)
 
 Used for generating query variations via `LlamaChatSession`.
+
+### Remote Providers (AQMD)
+
+Remote API providers are defined in `src/remote-providers.ts` and activated by environment variables. See [changes-from-qmd.md](changes-from-qmd.md) for full details.
+
+| Provider | Model | Env Variable | Notes |
+|----------|-------|-------------|-------|
+| **Gemini** | `embedding-001` | `GOOGLE_GENERATIVE_AI_API_KEY` | 768 dimensions, taskType-aware (RETRIEVAL_QUERY vs RETRIEVAL_DOCUMENT) |
+| **ZeroEntropy** | `zerank-2` | `ZEROENTROPY_API_KEY` | Cross-encoder reranking with retry/backoff |
+
+When a remote provider is active, its local counterpart is not loaded. Tokenization falls back to a character-based approximation (4 chars ≈ 1 token) to avoid loading the local embedding model.
 
 ## License
 
