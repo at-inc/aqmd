@@ -60,6 +60,7 @@ import {
   hybridQuery,
   vectorSearchQuery,
   structuredSearch,
+  getDefaultExpandedQueries,
   addLineNumbers,
   type ExpandedQuery,
   type HybridQueryExplain,
@@ -74,7 +75,7 @@ import {
   syncConfigToDb,
   type ReindexResult,
 } from "../store.js";
-import { disposeDefaultLlamaCpp, getDefaultLlamaCpp, withLLMSession, pullModels, DEFAULT_EMBED_MODEL_URI, DEFAULT_GENERATE_MODEL_URI, DEFAULT_RERANK_MODEL_URI, DEFAULT_MODEL_CACHE_DIR } from "../llm.js";
+import { disposeDefaultLlamaCpp, getDefaultLlamaCpp, withLLMSession, pullModels, DEFAULT_EMBED_MODEL_URI, DEFAULT_RERANK_MODEL_URI, DEFAULT_MODEL_CACHE_DIR } from "../llm.js";
 import {
   formatSearchResults,
   formatDocuments,
@@ -420,7 +421,6 @@ async function showStatus(): Promise<void> {
     console.log(`\n${c.bold}Models${c.reset}`);
     console.log(`  Embedding:   ${hfLink(DEFAULT_EMBED_MODEL_URI)}`);
     console.log(`  Reranking:   ${hfLink(DEFAULT_RERANK_MODEL_URI)}`);
-    console.log(`  Generation:  ${hfLink(DEFAULT_GENERATE_MODEL_URI)}`);
   }
 
   // Device / GPU info
@@ -1975,14 +1975,14 @@ function filterByCollections<T extends { filepath?: string; file?: string }>(res
 /**
  * Parse structured search query syntax.
  * Lines starting with lex:, vec:, or hyde: are routed directly.
- * Plain lines without prefix go through query expansion.
+ * Plain lines without prefix map to AQMD's default lex+vec query pair.
  * 
- * Returns null if this is a plain query (single line, no prefix).
+ * Returns null only for empty input.
  * Returns ExpandedQuery[] if structured syntax detected.
  * Throws if multiple plain lines (ambiguous).
  * 
  * Examples:
- *   "CAP theorem"                    -> null (plain query, use expansion)
+ *   "CAP theorem"                    -> { searches: [lex, vec] }
  *   "lex: CAP theorem"               -> [{ type: 'lex', query: 'CAP theorem' }]
  *   "lex: CAP\nvec: consistency"     -> [{ type: 'lex', ... }, { type: 'vec', ... }]
  *   "CAP\nconsistency"               -> throws (multiple plain lines)
@@ -2016,7 +2016,7 @@ function parseStructuredQuery(query: string): ParsedStructuredQuery | null {
       if (!text) {
         throw new Error('expand: query must include text.');
       }
-      return null; // treat as standalone expand query
+      return { searches: getDefaultExpandedQueries(text, line.number) };
     }
 
     // Parse intent: lines
@@ -2047,8 +2047,7 @@ function parseStructuredQuery(query: string): ParsedStructuredQuery | null {
     }
 
     if (rawLines.length === 1) {
-      // Single plain line -> implicit expand
-      return null;
+      return { searches: getDefaultExpandedQueries(line.trimmed, line.number) };
     }
 
     throw new Error(`Line ${line.number} is missing a lex:/vec:/hyde:/intent: prefix. Each line in a query document must start with one.`);
@@ -2098,7 +2097,7 @@ function search(query: string, opts: OutputOptions): void {
   outputResults(resultsWithContext, query, opts);
 }
 
-// Log query expansion as a tree to stderr (CLI progress feedback)
+// Log the default/structured query plan to stderr (CLI progress feedback)
 function logExpansionTree(originalQuery: string, expanded: ExpandedQuery[]): void {
   const lines: string[] = [];
   lines.push(`${c.dim}├─ ${originalQuery}${c.reset}`);
@@ -2224,7 +2223,7 @@ async function querySearch(query: string, opts: OutputOptions, _embedModel: stri
         },
       });
     } else {
-      // Standard hybrid query with automatic expansion
+      // Standard hybrid query path for SDK callers and legacy CLI states
       results = await hybridQuery(store, query, {
         collection: singleCollection,
         limit: opts.all ? 500 : (opts.limit || 10),
@@ -2233,16 +2232,13 @@ async function querySearch(query: string, opts: OutputOptions, _embedModel: stri
         explain: !!opts.explain,
         intent,
         hooks: {
-          onStrongSignal: (score) => {
-            process.stderr.write(`${c.dim}Strong BM25 signal (${score.toFixed(2)}) — skipping expansion${c.reset}\n`);
-          },
           onExpandStart: () => {
-            process.stderr.write(`${c.dim}Expanding query...${c.reset}`);
+            process.stderr.write(`${c.dim}Preparing default lex+vec query pair...${c.reset}`);
           },
           onExpand: (original, expanded, ms) => {
             process.stderr.write(`${c.dim} (${formatMs(ms)})${c.reset}\n`);
             logExpansionTree(original, expanded);
-            process.stderr.write(`${c.dim}Searching ${expanded.length + 1} queries...${c.reset}\n`);
+            process.stderr.write(`${c.dim}Searching ${Math.max(2, expanded.length)} queries...${c.reset}\n`);
           },
           onEmbedStart: (count) => {
             process.stderr.write(`${c.dim}Embedding ${count} ${count === 1 ? 'query' : 'queries'}...${c.reset}`);
@@ -2417,7 +2413,7 @@ function showHelp(): void {
   console.log("  qmd <command> [options]");
   console.log("");
   console.log("Primary commands:");
-  console.log("  qmd query <query>             - Hybrid search with auto expansion + reranking (recommended)");
+  console.log("  qmd query <query>             - Hybrid search with implicit lex+vec + reranking (recommended)");
   console.log("  qmd query 'lex:..\\nvec:...'   - Structured query document (you provide lex/vec/hyde lines)");
   console.log("  qmd search <query>            - Full-text BM25 keywords (no LLM)");
   console.log("  qmd vsearch <query>           - Vector similarity only");
@@ -2437,14 +2433,14 @@ function showHelp(): void {
   console.log("  qmd cleanup                   - Clear caches, vacuum DB");
   console.log("");
   console.log("Query syntax (qmd query):");
-  console.log("  QMD queries are either a single expand query (no prefix) or a multi-line");
-  console.log("  document where every line is typed with lex:, vec:, or hyde:. This grammar");
+  console.log("  QMD queries are either a single implicit query (mapped to lex:+vec:) or a");
+  console.log("  multi-line document where every line is typed with lex:, vec:, or hyde:. This grammar");
   console.log("  matches the docs in docs/SYNTAX.md and is enforced in the CLI.");
   console.log("");
   const grammar = [
-    `query          = expand_query | query_document ;`,
-    `expand_query   = text | explicit_expand ;`,
-    `explicit_expand= "expand:" text ;`,
+    `query          = implicit_query | query_document ;`,
+    `implicit_query = text | explicit_expand ;`,
+    `explicit_expand= "expand:" text ;  # compatibility alias; maps to lex+vec`,
     `query_document = [ intent_line ] { typed_line } ;`,
     `intent_line    = "intent:" text newline ;`,
     `typed_line     = type ":" text newline ;`,
@@ -2460,13 +2456,13 @@ function showHelp(): void {
   }
   console.log("");
   console.log("  Examples:");
-  console.log("    qmd query \"how does auth work\"                # single-line → implicit expand");
+  console.log("    qmd query \"how does auth work\"                # single-line → implicit lex + vec");
   console.log("    qmd query $'lex: CAP theorem\\nvec: consistency'  # typed query document");
   console.log("    qmd query $'lex: \"exact matches\" sports -baseball'  # phrase + negation lex search");
   console.log("    qmd query $'hyde: Hypothetical answer text'       # hyde-only document");
   console.log("");
   console.log("  Constraints:");
-  console.log("    - Standalone expand queries cannot mix with typed lines.");
+  console.log("    - Standalone implicit/expand queries cannot mix with typed lines.");
   console.log("    - Query documents allow only lex:, vec:, or hyde: prefixes.");
   console.log("    - Each typed line must be single-line text with balanced quotes.");
   console.log("");
@@ -2801,7 +2797,6 @@ if (isMain) {
       const refresh = cli.values.refresh === undefined ? false : Boolean(cli.values.refresh);
       const models = [
         DEFAULT_EMBED_MODEL_URI,
-        DEFAULT_GENERATE_MODEL_URI,
         DEFAULT_RERANK_MODEL_URI,
       ];
       console.log(`${c.bold}Pulling models${c.reset}`);

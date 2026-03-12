@@ -2,6 +2,35 @@
 
 This file tracks all divergent changes from the [QMD](https://github.com/tobi/qmd) upstream to minimize merge conflicts.
 
+## CRITICAL: Deterministic Plain Query Routing (No Expansion LLM)
+
+**Date:** 2026-03-12
+**Files changed:**
+- `src/store.ts` (MODIFIED) — Replaced plain-query expansion with deterministic `lex + vec` routing and versioned cache behavior
+- `src/cli/qmd.ts` (MODIFIED) — Plain CLI queries now parse to implicit `lex:` + `vec:` searches; removed generation model from `status`/`pull`
+- `src/index.ts` (MODIFIED) — SDK docs and `expandQuery()` behavior aligned to AQMD default `lex + vec` decomposition
+- `README.md` (MODIFIED) — Documented deterministic query routing and removal of query-expansion model from AQMD defaults
+- `docs/SYNTAX.md` (MODIFIED) — Query grammar/docs updated for implicit `lex + vec`
+- `CHANGELOG.md` (MODIFIED) — Added unreleased note for AQMD behavior change
+
+**What changed:**
+- Plain query input no longer invokes the local query-expansion LLM in AQMD
+- Implicit queries now normalize to exactly two searches: `lex: {query}` and `vec: {query}`
+- `expand:` remains accepted as a compatibility alias, but now maps to the same deterministic pair
+- AQMD `qmd pull` and `qmd status` no longer treat a generation model as part of the default query path
+
+**Why this is critical:**
+- This changes AQMD search semantics versus upstream QMD in a user-visible way
+- It removes a large local model dependency from the default `query` path
+- Any future upstream merge touching query parsing, `expandQuery()`, or CLI model reporting must preserve this AQMD behavior
+
+**Merge notes:**
+- `src/store.ts` divergence is localized to `expandQuery()`, `hybridQuery()`, and `vectorSearchQuery()`; reapply AQMD deterministic routing if upstream reintroduces LLM expansion
+- `src/cli/qmd.ts` divergence is localized to `parseStructuredQuery()`, help text, `status`, and `pull`
+- `docs/SYNTAX.md` and `README.md` intentionally differ from upstream to describe AQMD behavior, not QMD behavior
+
+---
+
 ## Remote Embedding & Reranking Providers
 
 **Date:** 2026-03-06

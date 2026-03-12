@@ -55,7 +55,12 @@ function parseStructuredQuery(query: string): ParsedStructuredQuery | null {
       if (!text) {
         throw new Error('expand: query must include text.');
       }
-      return null;
+      return {
+        searches: [
+          { type: "lex", query: text, line: line.number },
+          { type: "vec", query: text, line: line.number },
+        ],
+      };
     }
 
     if (intentRe.test(line.trimmed)) {
@@ -85,7 +90,12 @@ function parseStructuredQuery(query: string): ParsedStructuredQuery | null {
     }
 
     if (rawLines.length === 1) {
-      return null;
+      return {
+        searches: [
+          { type: "lex", query: line.trimmed, line: line.number },
+          { type: "vec", query: line.trimmed, line: line.number },
+        ],
+      };
     }
 
     throw new Error(`Line ${line.number} is missing a lex:/vec:/hyde:/intent: prefix. Each line in a query document must start with one.`);
@@ -459,14 +469,24 @@ describe("parseStructuredQuery with intent", () => {
     ).toThrow(/intent: must include text/);
   });
 
-  test("single plain line still returns null (expand mode)", () => {
+  test("single plain line maps to default lex+vec pair", () => {
     const result = parseStructuredQuery("how does auth work");
-    expect(result).toBeNull();
+    expect(result).toEqual({
+      searches: [
+        { type: "lex", query: "how does auth work", line: 1 },
+        { type: "vec", query: "how does auth work", line: 1 },
+      ],
+    });
   });
 
-  test("expand: line still returns null", () => {
+  test("expand: line maps to default lex+vec pair", () => {
     const result = parseStructuredQuery("expand: auth stuff");
-    expect(result).toBeNull();
+    expect(result).toEqual({
+      searches: [
+        { type: "lex", query: "auth stuff", line: 1 },
+        { type: "vec", query: "auth stuff", line: 1 },
+      ],
+    });
   });
 
   test("intent with expand throws error (expand can't mix)", () => {

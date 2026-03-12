@@ -23,6 +23,7 @@ import {
   structuredSearch,
   extractSnippet,
   addLineNumbers,
+  getDefaultExpandedQueries,
   DEFAULT_EMBED_MODEL,
   DEFAULT_MULTI_GET_MAX_BYTES,
   reindexCollection,
@@ -143,9 +144,9 @@ export type UpdateResult = {
  * Options for the unified search() method.
  */
 export interface SearchOptions {
-  /** Simple query string — will be auto-expanded via LLM */
+  /** Simple query string — AQMD maps this to its default lex+vec query pair */
   query?: string;
-  /** Pre-expanded queries (from expandQuery) — skips auto-expansion */
+  /** Pre-expanded queries (from expandQuery) — skips default query decomposition */
   queries?: ExpandedQuery[];
   /** Domain intent hint — steers expansion and reranking */
   intent?: string;
@@ -180,7 +181,7 @@ export interface VectorSearchOptions {
 }
 
 /**
- * Options for expandQuery() — manual query expansion.
+ * Options for expandQuery() — manual default-query decomposition.
  */
 export interface ExpandQueryOptions {
   intent?: string;
@@ -217,7 +218,7 @@ export interface QMDStore {
 
   // ── Search ──────────────────────────────────────────────────────────
 
-  /** Full search: query expansion + multi-signal retrieval + LLM reranking */
+  /** Full search: default lex+vec retrieval + LLM reranking */
   search(options: SearchOptions): Promise<HybridQueryResult[]>;
 
   /** BM25 keyword search (fast, no LLM) */
@@ -226,7 +227,7 @@ export interface QMDStore {
   /** Vector similarity search (embedding model, no reranking) */
   searchVector(query: string, options?: VectorSearchOptions): Promise<SearchResult[]>;
 
-  /** Expand a query into typed sub-searches (lex/vec/hyde) for manual control */
+  /** Normalize a query into AQMD's default typed searches (lex+vec) */
   expandQuery(query: string, options?: ExpandQueryOptions): Promise<ExpandedQuery[]>;
 
   // ── Document Retrieval ──────────────────────────────────────────────
@@ -392,7 +393,7 @@ export async function createStore(options: StoreOptions): Promise<QMDStore> {
         });
       }
 
-      // Simple query string — use hybridQuery (expand + search + rerank)
+      // Simple query string — use AQMD's deterministic plain-query path
       return hybridQuery(internal, opts.query!, {
         collection: collections[0],
         limit: opts.limit,
@@ -404,7 +405,10 @@ export async function createStore(options: StoreOptions): Promise<QMDStore> {
     },
     searchLex: async (q, opts) => internal.searchFTS(q, opts?.limit, opts?.collection),
     searchVector: async (q, opts) => internal.searchVec(q, DEFAULT_EMBED_MODEL, opts?.limit, opts?.collection),
-    expandQuery: async (q, opts) => internal.expandQuery(q, undefined, opts?.intent),
+    expandQuery: async (q, opts) => {
+      void opts;
+      return getDefaultExpandedQueries(q);
+    },
     get: async (pathOrDocid, opts) => internal.findDocument(pathOrDocid, opts),
     getDocumentBody: async (pathOrDocid, opts) => {
       const result = internal.findDocument(pathOrDocid, { includeBody: false });

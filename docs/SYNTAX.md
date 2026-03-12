@@ -5,8 +5,8 @@ QMD queries are structured documents with typed sub-queries. Each line specifies
 ## Grammar
 
 ```ebnf
-query          = expand_query | query_document ;
-expand_query   = text | explicit_expand ;
+query          = implicit_query | query_document ;
+implicit_query = text | explicit_expand ;
 explicit_expand= "expand:" text ;
 query_document = [ intent_line ] { typed_line } ;
 intent_line    = "intent:" text newline ;
@@ -28,7 +28,10 @@ newline        = "\n" ;
 
 ## Default Behavior
 
-A QMD query is either a single expand query or a multi-line query document. Any single-line query with no prefix is treated as an expand query and passed to the expansion model, which emits lex, vec, and hyde variants automatically.
+A QMD query is either a single implicit query or a multi-line query document. Any single-line query with no prefix is normalized into the default typed pair:
+
+- `lex: {query}`
+- `vec: {query}`
 
 ```
 # These are equivalent and cannot be combined with typed lines:
@@ -90,9 +93,9 @@ vec: how does rate limiting work in the API
 hyde: The API implements rate limiting using a token bucket algorithm...
 ```
 
-## Expand Queries
+## Implicit Queries
 
-An expand query stands alone; it's not mixed with typed lines. You can either rely on the default untyped form or add the explicit `expand:` prefix:
+An implicit query stands alone; it's not mixed with typed lines. You can either rely on the default untyped form or add the explicit `expand:` prefix as a compatibility alias:
 
 ```
 expand: error handling best practices
@@ -100,11 +103,16 @@ expand: error handling best practices
 error handling best practices
 ```
 
-Both forms call the local query expansion model, which generates lex, vec, and hyde variations automatically.
+Both forms normalize to the same default query pair:
+
+```
+lex: error handling best practices
+vec: error handling best practices
+```
 
 ## Intent
 
-An optional `intent:` line provides background context to disambiguate ambiguous queries. It steers query expansion, reranking, and snippet extraction but does not search on its own.
+An optional `intent:` line provides background context to disambiguate ambiguous queries. It steers reranking and snippet extraction but does not search on its own.
 
 - At most one `intent:` line per query document
 - `intent:` cannot appear alone — at least one `lex:`, `vec:`, or `hyde:` line is required
@@ -120,7 +128,7 @@ Without intent, "performance" is ambiguous (web-perf? team health? fitness?). Wi
 
 ## Constraints
 
-- Top-level query must be either a standalone expand query or a multi-line document
+- Top-level query must be either a standalone implicit query or a multi-line document
 - Query documents allow only `lex`, `vec`, `hyde`, and `intent` typed lines (no `expand:` inside)
 - `lex` syntax (`-term`, `"phrase"`) only works in lex queries
 - At most one `intent:` line per query document; cannot appear alone
@@ -164,7 +172,7 @@ With intent:
 ## CLI
 
 ```bash
-# Single line (implicit expand)
+# Single line (implicit lex+vec)
 qmd query "how does auth work"
 
 # Multi-line with types

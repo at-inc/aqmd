@@ -49,7 +49,10 @@ function parseStructuredQuery(query: string): ExpandedQuery[] | null {
       if (!text) {
         throw new Error('expand: query must include text.');
       }
-      return null;
+      return [
+        { type: "lex", query: text, line: line.number },
+        { type: "vec", query: text, line: line.number },
+      ];
     }
 
     const match = line.trimmed.match(prefixRe);
@@ -67,7 +70,10 @@ function parseStructuredQuery(query: string): ExpandedQuery[] | null {
     }
 
     if (rawLines.length === 1) {
-      return null;
+      return [
+        { type: "lex", query: line.trimmed, line: line.number },
+        { type: "vec", query: line.trimmed, line: line.number },
+      ];
     }
 
     throw new Error(`Line ${line.number} is missing a lex:/vec:/hyde: prefix. Each line in a query document must start with one.`);
@@ -77,14 +83,23 @@ function parseStructuredQuery(query: string): ExpandedQuery[] | null {
 }
 
 describe("parseStructuredQuery", () => {
-  describe("plain queries (returns null for normal expansion)", () => {
+  describe("plain queries (map to default lex+vec)", () => {
     test("single line without prefix", () => {
-      expect(parseStructuredQuery("CAP theorem")).toBeNull();
-      expect(parseStructuredQuery("distributed systems")).toBeNull();
+      expect(parseStructuredQuery("CAP theorem")).toEqual([
+        { type: "lex", query: "CAP theorem", line: 1 },
+        { type: "vec", query: "CAP theorem", line: 1 },
+      ]);
+      expect(parseStructuredQuery("distributed systems")).toEqual([
+        { type: "lex", query: "distributed systems", line: 1 },
+        { type: "vec", query: "distributed systems", line: 1 },
+      ]);
     });
 
-    test("explicit expand line treated as plain query", () => {
-      expect(parseStructuredQuery("expand: error handling best practices")).toBeNull();
+    test("explicit expand line maps to default pair", () => {
+      expect(parseStructuredQuery("expand: error handling best practices")).toEqual([
+        { type: "lex", query: "error handling best practices", line: 1 },
+        { type: "vec", query: "error handling best practices", line: 1 },
+      ]);
     });
 
     test("empty queries", () => {

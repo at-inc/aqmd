@@ -346,19 +346,17 @@ describe("MCP Server", () => {
   });
 
   // ===========================================================================
-  // hybridQuery (query expansion + reranking)
+  // hybridQuery (default lex+vec routing + reranking)
   // ===========================================================================
 
-  describe.skipIf(!!process.env.CI)("hybridQuery (expansion + reranking)", () => {
-    test("expands query with typed variations", async () => {
+  describe.skipIf(!!process.env.CI)("hybridQuery (default query routing + reranking)", () => {
+    test("expandQuery returns AQMD's deterministic typed queries", async () => {
       const expanded = await expandQuery("api documentation", DEFAULT_QUERY_MODEL, testDb);
-      // Returns ExpandedQuery[] — typed expansions, original excluded
-      expect(expanded.length).toBeGreaterThanOrEqual(1);
-      for (const q of expanded) {
-        expect(['lex', 'vec', 'hyde']).toContain(q.type);
-        expect(q.query.length).toBeGreaterThan(0);
-      }
-    }, 30000); // 30s timeout for model loading
+      expect(expanded).toEqual([
+        { type: "lex", query: "api documentation" },
+        { type: "vec", query: "api documentation" },
+      ]);
+    });
 
     test("performs RRF fusion on multiple result lists", () => {
       const list1: RankedResult[] = [

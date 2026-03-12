@@ -2388,25 +2388,22 @@ describe.skipIf(!!process.env.CI)("LlamaCpp Integration", () => {
     await cleanupTestDb(store);
   });
 
-  test("expandQuery returns typed expansions (no original query)", async () => {
+  test("expandQuery returns AQMD's default lex+vec pair", async () => {
     const store = await createTestStore();
 
     const expanded = await store.expandQuery("test query");
-    // Returns ExpandedQuery[] — typed results from LLM, excluding original
-    expect(expanded.length).toBeGreaterThanOrEqual(1);
-    for (const q of expanded) {
-      expect(['lex', 'vec', 'hyde']).toContain(q.type);
-      expect(q.query.length).toBeGreaterThan(0);
-      expect(q.query).not.toBe("test query"); // original excluded
-    }
+    expect(expanded).toEqual([
+      { type: "lex", query: "test query" },
+      { type: "vec", query: "test query" },
+    ]);
 
     await cleanupTestDb(store);
-  }, 30000);
+  });
 
   test("expandQuery caches results as JSON with types", async () => {
     const store = await createTestStore();
 
-    // First call — hits LLM
+    // First call — computes deterministic default pair
     const queries1 = await store.expandQuery("cached query test");
     // Second call — hits cache
     const queries2 = await store.expandQuery("cached query test");
@@ -2416,7 +2413,7 @@ describe.skipIf(!!process.env.CI)("LlamaCpp Integration", () => {
     expect(queries2[0]?.type).toBeDefined();
 
     await cleanupTestDb(store);
-  }, 30000);
+  });
 
   test("rerank scores documents", async () => {
     const store = await createTestStore();

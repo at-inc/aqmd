@@ -613,8 +613,8 @@ describe("search (unified API)", () => {
     expect(results.length).toBeGreaterThan(0);
   });
 
-  // Tests below use search({ query: ... }) which triggers LLM query expansion
-  describe.skipIf(!!process.env.CI)("with LLM query expansion", () => {
+  // Tests below use search({ query: ... }) which follows AQMD's implicit lex+vec path
+  describe("with implicit lex+vec query routing", () => {
     test("search() with query and rerank:false returns results", async () => {
       const results = await store.search({ query: "authentication", rerank: false });
       expect(results.length).toBeGreaterThan(0);

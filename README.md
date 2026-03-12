@@ -200,7 +200,7 @@ const store3 = await createStore({ dbPath: './index.sqlite' })
 The unified `search()` method handles both simple queries and pre-expanded structured queries:
 
 ```typescript
-// Simple query — auto-expanded via LLM, then BM25 + vector + reranking
+// Simple query — normalized to lex+vec, then BM25 + vector + reranking
 const results = await store.search({ query: "authentication flow" })
 
 // With options
@@ -213,7 +213,7 @@ const results2 = await store.search({
   explain: true,
 })
 
-// Pre-expanded queries — skip auto-expansion, control each sub-query
+// Pre-expanded queries — skip default decomposition, control each sub-query
 const results3 = await store.search({
   queries: [
     { type: 'lex', query: '"connection pool" timeout -redis' },
@@ -235,7 +235,7 @@ const lexResults = await store.searchLex("auth middleware", { limit: 10 })
 // Vector similarity search (embedding model, no reranking)
 const vecResults = await store.searchVector("how users log in", { limit: 10 })
 
-// Manual query expansion for full control
+// AQMD default query decomposition for full control
 const expanded = await store.expandQuery("auth flow", { intent: "user login" })
 const results4 = await store.search({ queries: expanded })
 ```
@@ -386,35 +386,30 @@ The SDK requires explicit `dbPath` — no defaults are assumed. This makes it sa
                                        │
                         ┌──────────────┴──────────────┐
                         ▼                             ▼
-               ┌────────────────┐            ┌────────────────┐
-               │ Query Expansion│            │  Original Query│
-               │  (fine-tuned)  │            │   (×2 weight)  │
-               └───────┬────────┘            └───────┬────────┘
-                       │                             │
-                       │ 2 alternative queries       │
-                       └──────────────┬──────────────┘
-                                      │
-              ┌───────────────────────┼───────────────────────┐
-              ▼                       ▼                       ▼
-     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-     │ Original Query  │     │ Expanded Query 1│     │ Expanded Query 2│
-     └────────┬────────┘     └────────┬────────┘     └────────┬────────┘
-              │                       │                       │
-      ┌───────┴───────┐       ┌───────┴───────┐       ┌───────┴───────┐
-      ▼               ▼       ▼               ▼       ▼               ▼
-  ┌───────┐       ┌───────┐ ┌───────┐     ┌───────┐ ┌───────┐     ┌───────┐
-  │ BM25  │       │Vector │ │ BM25  │     │Vector │ │ BM25  │     │Vector │
-  │(FTS5) │       │Search │ │(FTS5) │     │Search │ │(FTS5) │     │Search │
-  └───┬───┘       └───┬───┘ └───┬───┘     └───┬───┘ └───┬───┘     └───┬───┘
-      │               │         │             │         │             │
-      └───────┬───────┘         └──────┬──────┘         └──────┬──────┘
-              │                        │                       │
-              └────────────────────────┼───────────────────────┘
-                                       │
-                                       ▼
+               ┌──────────────────────────────┐
+               │ Default Query Decomposition  │
+               │      lex:{q} + vec:{q}       │
+               └──────────────┬───────────────┘
+                              │
+              ┌───────────────┴────────────────┐
+              ▼                                ▼
+     ┌─────────────────┐              ┌─────────────────┐
+     │   lex: query    │              │   vec: query    │
+     └────────┬────────┘              └────────┬────────┘
+              │                                │
+          ┌───┴───┐                        ┌───┴───┐
+          ▼       ▼                        ▼       ▼
+      ┌───────┐ ┌───────┐              ┌───────┐ ┌───────┐
+      │ BM25  │ │Vector │              │ BM25  │ │Vector │
+      │(FTS5) │ │Search │              │(FTS5) │ │Search │
+      └───┬───┘ └───┬───┘              └───┬───┘ └───┬───┘
+          │         │                        │         │
+          └─────────┴────────────┬───────────┴─────────┘
+                                 │
+                                 ▼
                           ┌───────────────────────┐
                           │   RRF Fusion + Bonus  │
-                          │  Original query: ×2   │
+                          │  lex + vec candidates │
                           │  Top-rank bonus: +0.05│
                           │     Top 30 Kept       │
                           └───────────┬───────────┘
@@ -449,8 +444,8 @@ The SDK requires explicit `dbPath` — no defaults are assumed. This makes it sa
 
 The `query` command uses **Reciprocal Rank Fusion (RRF)** with position-aware blending:
 
-1. **Query Expansion**: Original query (×2 for weighting) + 1 LLM variation
-2. **Parallel Retrieval**: Each query searches both FTS and vector indexes
+1. **Query Decomposition**: Plain queries map to `lex:{query}` and `vec:{query}`
+2. **Parallel Retrieval**: BM25 and vector search run against the default query pair
 3. **RRF Fusion**: Combine all result lists using `score = Σ(1/(k+rank+1))` where k=60
 4. **Top-Rank Bonus**: Documents ranking #1 in any list get +0.05, #2-3 get +0.02
 5. **Top-K Selection**: Take top 30 candidates for reranking
@@ -460,7 +455,7 @@ The `query` command uses **Reciprocal Rank Fusion (RRF)** with position-aware bl
    - RRF rank 4-10: 60% retrieval, 40% reranker
    - RRF rank 11+: 40% retrieval, 60% reranker (trust reranker more)
 
-**Why this approach**: Pure RRF can dilute exact matches when expanded queries don't match. The top-rank bonus preserves documents that score #1 for the original query. Position-aware blending prevents the reranker from destroying high-confidence retrieval results.
+**Why this approach**: AQMD keeps the plain-query path deterministic and cheap. Exact lexical matches and semantic neighbors both participate in fusion, while reranking still cleans up the final ordering.
 
 ### Score Interpretation
 
@@ -484,17 +479,16 @@ The `query` command uses **Reciprocal Rank Fusion (RRF)** with position-aware bl
 
 ### GGUF Models (via node-llama-cpp)
 
-When using **local models** (default, no env vars set), AQMD uses three GGUF models (auto-downloaded on first use):
+When using **local models** (default, no env vars set), AQMD uses two GGUF models (auto-downloaded on first use):
 
 | Model | Purpose | Size | Remote Alternative |
 |-------|---------|------|--------------------|
 | `embeddinggemma-300M-Q8_0` | Vector embeddings (default) | ~300MB | Gemini `embedding-001` |
 | `qwen3-reranker-0.6b-q8_0` | Re-ranking | ~640MB | ZeroEntropy `zerank-2` |
-| `qmd-query-expansion-1.7B-q4_k_m` | Query expansion (fine-tuned) | ~1.1GB | *(local only)* |
 
 Models are downloaded from HuggingFace and cached in `~/.cache/qmd/models/`.
 
-> **Remote mode**: When `GOOGLE_GENERATIVE_AI_API_KEY` and/or `ZEROENTROPY_API_KEY` are set, the corresponding remote providers are used instead. The local embedding and reranking models are not downloaded or loaded. Query expansion always uses the local model.
+> **Remote mode**: When `GOOGLE_GENERATIVE_AI_API_KEY` and/or `ZEROENTROPY_API_KEY` are set, the corresponding remote providers are used instead. The local embedding and reranking models are not downloaded or loaded.
 
 ### Custom Embedding Model
 
@@ -601,7 +595,7 @@ qmd context rm qmd://notes/old
 ├──────────┬───────────────────────────────────────────────────────┤
 │ search   │ BM25 full-text search only                           │
 │ vsearch  │ Vector semantic search only                          │
-│ query    │ Hybrid: FTS + Vector + Query Expansion + Re-ranking  │
+│ query    │ Hybrid: FTS + Vector + implicit lex+vec + Re-ranking │
 └──────────┴───────────────────────────────────────────────────────┘
 ```
 
@@ -746,7 +740,7 @@ documents       -- Markdown content with metadata and docid (6-char hash)
 documents_fts   -- FTS5 full-text index
 content_vectors -- Embedding chunks (hash, seq, pos, 900 tokens each)
 vectors_vec     -- sqlite-vec vector index (hash_seq key)
-llm_cache       -- Cached LLM responses (query expansion, rerank scores)
+llm_cache       -- Cached query plans and rerank scores
 ```
 
 ## Environment Variables
@@ -868,7 +862,6 @@ Models are configured in `src/llm.ts` as HuggingFace URIs:
 ```typescript
 const DEFAULT_EMBED_MODEL = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
 const DEFAULT_RERANK_MODEL = "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf";
-const DEFAULT_GENERATE_MODEL = "hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf";
 ```
 
 #### EmbeddingGemma Prompt Format
@@ -885,9 +878,7 @@ const DEFAULT_GENERATE_MODEL = "hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query
 
 Uses node-llama-cpp's `createRankingContext()` and `rankAndSort()` API for cross-encoder reranking. Returns documents sorted by relevance score (0.0 - 1.0).
 
-#### Qwen3 (Query Expansion)
-
-Used for generating query variations via `LlamaChatSession`.
+AQMD does not use a local generation model in the default `query` path. Plain queries are normalized into `lex:{query}` and `vec:{query}` before retrieval.
 
 ### Remote Providers (AQMD)
 

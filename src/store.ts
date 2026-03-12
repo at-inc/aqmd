@@ -245,6 +245,20 @@ export type ExpandedQuery = {
   line?: number;
 };
 
+export function getDefaultExpandedQueries(query: string, line?: number): ExpandedQuery[] {
+  const normalized = query.trim();
+  if (!normalized) return [];
+
+  const makeQuery = <T extends ExpandedQuery["type"]>(type: T): ExpandedQuery => (
+    line === undefined ? { type, query: normalized } : { type, query: normalized, line }
+  );
+
+  return [
+    makeQuery("lex"),
+    makeQuery("vec"),
+  ];
+}
+
 // =============================================================================
 // Path utilities
 // =============================================================================
@@ -2821,37 +2835,28 @@ export function insertEmbedding(
 // =============================================================================
 
 export async function expandQuery(query: string, model: string = DEFAULT_QUERY_MODEL, db: Database, intent?: string, llmOverride?: LlamaCpp): Promise<ExpandedQuery[]> {
-  // Check cache first — stored as JSON preserving types
-  const cacheKey = getCacheKey("expandQuery", { query, model, ...(intent && { intent }) });
+  void llmOverride;
+
+  // AQMD divergence: plain query expansion is deterministic (lex + vec).
+  // Version the cache key so old upstream LLM expansions are ignored.
+  const cacheKey = getCacheKey("expandQuery", {
+    query,
+    model,
+    strategy: "aqmd-static-lex-vec-v1",
+    ...(intent && { intent }),
+  });
   const cached = getCachedResult(db, cacheKey);
   if (cached) {
     try {
-      const parsed = JSON.parse(cached) as any[];
-      // Migrate old cache format: { type, text } → { type, query }
-      if (parsed.length > 0 && parsed[0].query) {
-        return parsed as ExpandedQuery[];
-      } else if (parsed.length > 0 && parsed[0].text) {
-        return parsed.map((r: any) => ({ type: r.type, query: r.text }));
-      }
+      const parsed = JSON.parse(cached) as ExpandedQuery[];
+      if (Array.isArray(parsed)) return parsed;
     } catch {
-      // Old cache format (pre-typed, newline-separated text) — re-expand
+      // Fall through and rebuild deterministic defaults.
     }
   }
 
-  const llm = llmOverride ?? getDefaultLlamaCpp();
-  // Note: LlamaCpp uses hardcoded model, model parameter is ignored
-  const results = await llm.expandQuery(query, { intent });
-
-  // Map Queryable[] → ExpandedQuery[] (same shape, decoupled from llm.ts internals).
-  // Filter out entries that duplicate the original query text.
-  const expanded: ExpandedQuery[] = results
-    .filter(r => r.text !== query)
-    .map(r => ({ type: r.type, query: r.text }));
-
-  if (expanded.length > 0) {
-    setCachedResult(db, cacheKey, JSON.stringify(expanded));
-  }
-
+  const expanded = getDefaultExpandedQueries(query);
+  setCachedResult(db, cacheKey, JSON.stringify(expanded));
   return expanded;
 }
 
@@ -3552,11 +3557,11 @@ export type RankedListMeta = {
 };
 
 /**
- * Hybrid search: BM25 + vector + query expansion + RRF + chunked reranking.
+ * Hybrid search: BM25 + vector + deterministic query decomposition + RRF + chunked reranking.
  *
  * Pipeline:
- * 1. BM25 probe → skip expansion if strong signal
- * 2. expandQuery() → typed query variants (lex/vec/hyde)
+ * 1. BM25 probe
+ * 2. expandQuery() → typed query variants (AQMD default: lex + vec of the original query)
  * 3. Type-routed search: original→vector, lex→FTS, vec/hyde→vector
  * 4. RRF fusion → slice to candidateLimit
  * 5. chunkDocument() + keyword-best-chunk selection
@@ -3585,27 +3590,13 @@ export async function hybridQuery(
     `SELECT name FROM sqlite_master WHERE type='table' AND name='vectors_vec'`
   ).get();
 
-  // Step 1: BM25 probe — strong signal skips expensive LLM expansion
-  // When intent is provided, disable strong-signal bypass — the obvious BM25
-  // match may not be what the caller wants (e.g. "performance" with intent
-  // "web page load times" should NOT shortcut to a sports-performance doc).
-  // Pass collection directly into FTS query (filter at SQL level, not post-hoc)
+  // Step 1: BM25 probe
   const initialFts = store.searchFTS(query, 20, collection);
-  const topScore = initialFts[0]?.score ?? 0;
-  const secondScore = initialFts[1]?.score ?? 0;
-  const hasStrongSignal = !intent && initialFts.length > 0
-    && topScore >= STRONG_SIGNAL_MIN_SCORE
-    && (topScore - secondScore) >= STRONG_SIGNAL_MIN_GAP;
 
-  if (hasStrongSignal) hooks?.onStrongSignal?.(topScore);
-
-  // Step 2: Expand query (or skip if strong signal)
+  // Step 2: Deterministic typed expansion
   hooks?.onExpandStart?.();
   const expandStart = Date.now();
-  const expanded = hasStrongSignal
-    ? []
-    : await store.expandQuery(query, undefined, intent);
-
+  const expanded = await store.expandQuery(query, undefined, intent);
   hooks?.onExpand?.(query, expanded, Date.now() - expandStart);
 
   // Seed with initial FTS results (avoid re-running original query FTS)
@@ -3627,6 +3618,7 @@ export async function hybridQuery(
   // 3a: Run FTS for all lex expansions right away (no LLM needed)
   for (const q of expanded) {
     if (q.type === 'lex') {
+      if (q.query === query) continue;
       const ftsResults = store.searchFTS(q.query, 20, collection);
       if (ftsResults.length > 0) {
         for (const r of ftsResults) docidMap.set(r.filepath, r.docid);
@@ -3645,7 +3637,7 @@ export async function hybridQuery(
       { text: query, queryType: "original" },
     ];
     for (const q of expanded) {
-      if (q.type === 'vec' || q.type === 'hyde') {
+      if ((q.type === 'vec' || q.type === 'hyde') && q.query !== query) {
         vecQueries.push({ text: q.query, queryType: q.type });
       }
     }
@@ -3863,7 +3855,7 @@ export interface VectorSearchResult {
 }
 
 /**
- * Vector-only semantic search with query expansion.
+ * Vector-only semantic search with deterministic query decomposition.
  *
  * Pipeline:
  * 1. expandQuery() → typed variants, filter to vec/hyde only (lex irrelevant here)
@@ -3889,7 +3881,7 @@ export async function vectorSearchQuery(
   // Expand query — filter to vec/hyde only (lex queries target FTS, not vector)
   const expandStart = Date.now();
   const allExpanded = await store.expandQuery(query, undefined, intent);
-  const vecExpanded = allExpanded.filter(q => q.type !== 'lex');
+  const vecExpanded = allExpanded.filter(q => q.type !== 'lex' && q.query !== query);
   options?.hooks?.onExpand?.(query, vecExpanded, Date.now() - expandStart);
 
   // Run original + vec/hyde expanded through vector, sequentially — concurrent embed() hangs
@@ -3941,9 +3933,9 @@ export interface StructuredSearchOptions {
 }
 
 /**
- * Structured search: execute pre-expanded queries without LLM query expansion.
+ * Structured search: execute pre-expanded queries without internal query decomposition.
  *
- * Designed for LLM callers (MCP/HTTP) that generate their own query expansions.
+ * Designed for LLM callers (MCP/HTTP) that generate their own query sets.
  * Skips the internal expandQuery() step — goes directly to:
  *
  * Pipeline:

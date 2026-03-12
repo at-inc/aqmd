@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changes
+
+- AQMD: plain `qmd query` input no longer uses LLM query expansion. Implicit queries now normalize to `lex:{query}` plus `vec:{query}`, and the CLI no longer pulls or reports a local generation model for this path.
+
 ## [2.0.0] - 2026-03-10
 
 QMD 2.0 declares a stable library API. The SDK is now the primary interface —
