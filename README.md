@@ -1,10 +1,10 @@
-# AQMD - Query Markup Documents
+# QMD - Query Markup Documents
 
-> Fork of [QMD](https://github.com/tobi/qmd) with remote API provider support. See [changes-from-qmd.md](changes-from-qmd.md) for divergence details.
+> AQMD is a fork of [QMD](https://github.com/tobi/qmd). Divergent behavior is tracked in [changes-from-qmd.md](changes-from-qmd.md) to keep this README close to upstream.
 
 An on-device search engine for everything you need to remember. Index your markdown notes, meeting transcripts, documentation, and knowledge bases. Search with keywords or natural language. Ideal for your agentic flows.
 
-AQMD combines BM25 full-text search, vector semantic search, and LLM re-ranking. Embedding and reranking run through Aside's API proxy (`browser-api.aside.at`) — no API keys required.
+QMD combines BM25 full-text search, vector semantic search, and LLM re-ranking—all running locally via node-llama-cpp with GGUF models.
 
 ![QMD Architecture](assets/qmd-architecture.png)
 
@@ -14,13 +14,13 @@ You can read more about QMD's progress in the [CHANGELOG](CHANGELOG.md).
 
 ```sh
 # Install globally (Node or Bun)
-npm install -g @tobilu/qmd
+npm install -g aqmd
 # or
-bun install -g @tobilu/qmd
+bun install -g aqmd
 
 # Or run directly
-npx @tobilu/qmd ...
-bunx @tobilu/qmd ...
+npx aqmd ...
+bunx aqmd ...
 
 # Create collections for your notes, docs, and meeting transcripts
 qmd collection add ~/notes --name notes
@@ -200,7 +200,7 @@ const store3 = await createStore({ dbPath: './index.sqlite' })
 The unified `search()` method handles both simple queries and pre-expanded structured queries:
 
 ```typescript
-// Simple query — normalized to lex+vec, then BM25 + vector + reranking
+// Simple query — auto-expanded via LLM, then BM25 + vector + reranking
 const results = await store.search({ query: "authentication flow" })
 
 // With options
@@ -213,7 +213,7 @@ const results2 = await store.search({
   explain: true,
 })
 
-// Pre-expanded queries — skip default decomposition, control each sub-query
+// Pre-expanded queries — skip auto-expansion, control each sub-query
 const results3 = await store.search({
   queries: [
     { type: 'lex', query: '"connection pool" timeout -redis' },
@@ -235,7 +235,7 @@ const lexResults = await store.searchLex("auth middleware", { limit: 10 })
 // Vector similarity search (embedding model, no reranking)
 const vecResults = await store.searchVector("how users log in", { limit: 10 })
 
-// AQMD default query decomposition for full control
+// Manual query expansion for full control
 const expanded = await store.expandQuery("auth flow", { intent: "user login" })
 const results4 = await store.search({ queries: expanded })
 ```
@@ -386,30 +386,35 @@ The SDK requires explicit `dbPath` — no defaults are assumed. This makes it sa
                                        │
                         ┌──────────────┴──────────────┐
                         ▼                             ▼
-               ┌──────────────────────────────┐
-               │ Default Query Decomposition  │
-               │      lex:{q} + vec:{q}       │
-               └──────────────┬───────────────┘
-                              │
-              ┌───────────────┴────────────────┐
-              ▼                                ▼
-     ┌─────────────────┐              ┌─────────────────┐
-     │   lex: query    │              │   vec: query    │
-     └────────┬────────┘              └────────┬────────┘
-              │                                │
-          ┌───┴───┐                        ┌───┴───┐
-          ▼       ▼                        ▼       ▼
-      ┌───────┐ ┌───────┐              ┌───────┐ ┌───────┐
-      │ BM25  │ │Vector │              │ BM25  │ │Vector │
-      │(FTS5) │ │Search │              │(FTS5) │ │Search │
-      └───┬───┘ └───┬───┘              └───┬───┘ └───┬───┘
-          │         │                        │         │
-          └─────────┴────────────┬───────────┴─────────┘
-                                 │
-                                 ▼
+               ┌────────────────┐            ┌────────────────┐
+               │ Query Expansion│            │  Original Query│
+               │  (fine-tuned)  │            │   (×2 weight)  │
+               └───────┬────────┘            └───────┬────────┘
+                       │                             │
+                       │ 2 alternative queries       │
+                       └──────────────┬──────────────┘
+                                      │
+              ┌───────────────────────┼───────────────────────┐
+              ▼                       ▼                       ▼
+     ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+     │ Original Query  │     │ Expanded Query 1│     │ Expanded Query 2│
+     └────────┬────────┘     └────────┬────────┘     └────────┬────────┘
+              │                       │                       │
+      ┌───────┴───────┐       ┌───────┴───────┐       ┌───────┴───────┐
+      ▼               ▼       ▼               ▼       ▼               ▼
+  ┌───────┐       ┌───────┐ ┌───────┐     ┌───────┐ ┌───────┐     ┌───────┐
+  │ BM25  │       │Vector │ │ BM25  │     │Vector │ │ BM25  │     │Vector │
+  │(FTS5) │       │Search │ │(FTS5) │     │Search │ │(FTS5) │     │Search │
+  └───┬───┘       └───┬───┘ └───┬───┘     └───┬───┘ └───┬───┘     └───┬───┘
+      │               │         │             │         │             │
+      └───────┬───────┘         └──────┬──────┘         └──────┬──────┘
+              │                        │                       │
+              └────────────────────────┼───────────────────────┘
+                                       │
+                                       ▼
                           ┌───────────────────────┐
                           │   RRF Fusion + Bonus  │
-                          │  lex + vec candidates │
+                          │  Original query: ×2   │
                           │  Top-rank bonus: +0.05│
                           │     Top 30 Kept       │
                           └───────────┬───────────┘
@@ -417,8 +422,8 @@ The SDK requires explicit `dbPath` — no defaults are assumed. This makes it sa
                                       ▼
                           ┌───────────────────────┐
                           │    LLM Re-ranking     │
-                          │   (Aside API proxy)   │
-                          │                       │
+                          │  (qwen3-reranker)     │
+                          │  Yes/No + logprobs    │
                           └───────────┬───────────┘
                                       │
                                       ▼
@@ -444,8 +449,8 @@ The SDK requires explicit `dbPath` — no defaults are assumed. This makes it sa
 
 The `query` command uses **Reciprocal Rank Fusion (RRF)** with position-aware blending:
 
-1. **Query Decomposition**: Plain queries map to `lex:{query}` and `vec:{query}`
-2. **Parallel Retrieval**: BM25 and vector search run against the default query pair
+1. **Query Expansion**: Original query (×2 for weighting) + 1 LLM variation
+2. **Parallel Retrieval**: Each query searches both FTS and vector indexes
 3. **RRF Fusion**: Combine all result lists using `score = Σ(1/(k+rank+1))` where k=60
 4. **Top-Rank Bonus**: Documents ranking #1 in any list get +0.05, #2-3 get +0.02
 5. **Top-K Selection**: Take top 30 candidates for reranking
@@ -455,7 +460,7 @@ The `query` command uses **Reciprocal Rank Fusion (RRF)** with position-aware bl
    - RRF rank 4-10: 60% retrieval, 40% reranker
    - RRF rank 11+: 40% retrieval, 60% reranker (trust reranker more)
 
-**Why this approach**: AQMD keeps the plain-query path deterministic and cheap. Exact lexical matches and semantic neighbors both participate in fusion, while reranking still cleans up the final ordering.
+**Why this approach**: Pure RRF can dilute exact matches when expanded queries don't match. The top-rank bonus preserves documents that score #1 for the original query. Position-aware blending prevents the reranker from destroying high-confidence retrieval results.
 
 ### Score Interpretation
 
@@ -477,23 +482,46 @@ The `query` command uses **Reciprocal Rank Fusion (RRF)** with position-aware bl
   brew install sqlite
   ```
 
-### Remote Models (via Aside API)
+### GGUF Models (via node-llama-cpp)
 
-AQMD routes all embedding and reranking through Aside's API proxy. No API keys are needed — the server handles upstream authentication.
+QMD uses three local GGUF models (auto-downloaded on first use):
 
-| Function | Upstream Provider | Model | Dimensions |
-|----------|-------------------|-------|------------|
-| Embedding | Gemini | `gemini-embedding-2-preview` | 768 |
-| Reranking | ZeroEntropy | `zerank-2` | — |
+| Model | Purpose | Size |
+|-------|---------|------|
+| `embeddinggemma-300M-Q8_0` | Vector embeddings (default) | ~300MB |
+| `qwen3-reranker-0.6b-q8_0` | Re-ranking | ~640MB |
+| `qmd-query-expansion-1.7B-q4_k_m` | Query expansion (fine-tuned) | ~1.1GB |
 
-Local GGUF models (embeddinggemma, qwen3-reranker) are never downloaded or loaded. Tokenization uses a character-based approximation (4 chars ≈ 1 token).
+Models are downloaded from HuggingFace and cached in `~/.cache/qmd/models/`.
+
+### Custom Embedding Model
+
+Override the default embedding model via the `QMD_EMBED_MODEL` environment variable.
+This is useful for multilingual corpora (e.g. Chinese, Japanese, Korean) where
+`embeddinggemma-300M` has limited coverage.
+
+```sh
+# Use Qwen3-Embedding-0.6B for better multilingual (CJK) support
+export QMD_EMBED_MODEL="hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf"
+
+# After changing the model, re-embed all collections:
+qmd embed -f
+```
+
+Supported model families:
+- **embeddinggemma** (default) — English-optimized, small footprint
+- **Qwen3-Embedding** — Multilingual (119 languages including CJK), MTEB top-ranked
+
+> **Note:** When switching embedding models, you must re-index with `qmd embed -f`
+> since vectors are not cross-compatible between models. The prompt format is
+> automatically adjusted for each model family.
 
 ## Installation
 
 ```sh
-npm install -g @tobilu/qmd
+npm install -g aqmd
 # or
-bun install -g @tobilu/qmd
+bun install -g aqmd
 ```
 
 ### Development
@@ -571,7 +599,7 @@ qmd context rm qmd://notes/old
 ├──────────┬───────────────────────────────────────────────────────┤
 │ search   │ BM25 full-text search only                           │
 │ vsearch  │ Vector semantic search only                          │
-│ query    │ Hybrid: FTS + Vector + implicit lex+vec + Re-ranking │
+│ query    │ Hybrid: FTS + Vector + Query Expansion + Re-ranking  │
 └──────────┴───────────────────────────────────────────────────────┘
 ```
 
@@ -716,14 +744,13 @@ documents       -- Markdown content with metadata and docid (6-char hash)
 documents_fts   -- FTS5 full-text index
 content_vectors -- Embedding chunks (hash, seq, pos, 900 tokens each)
 vectors_vec     -- sqlite-vec vector index (hash_seq key)
-llm_cache       -- Cached query plans and rerank scores
+llm_cache       -- Cached LLM responses (query expansion, rerank scores)
 ```
 
 ## Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ASIDE_API_URL` | `https://browser-api.aside.at` | Aside API base URL (embedding + reranking proxy) |
 | `XDG_CACHE_HOME` | `~/.cache` | Cache directory location |
 
 ## How It Works
@@ -748,8 +775,8 @@ Collection ──► Glob Pattern ──► Markdown Files ──► Parse Title
 Documents are chunked into ~900-token pieces with 15% overlap using smart boundary detection:
 
 ```
-Document ──► Smart Chunk (~900 tokens) ──► Format each chunk ──► Aside API  ──► Store Vectors
-                │                           "title | text"       (Gemini proxy)
+Document ──► Smart Chunk (~900 tokens) ──► Format each chunk ──► node-llama-cpp ──► Store Vectors
+                │                           "title | text"        embedBatch()
                 │
                 └─► Chunks stored with:
                     - hash: document hash
@@ -828,16 +855,31 @@ Query ──► LLM Expansion ──► [Original, Variant 1, Variant 2]
 
 ## Model Configuration
 
-### Aside API (AQMD default)
+Models are configured in `src/llm.ts` as HuggingFace URIs:
 
-All embedding and reranking is handled by `src/aside-api-client.ts`, which calls Aside's proxy API. No local GGUF models are loaded for embedding or reranking.
+```typescript
+const DEFAULT_EMBED_MODEL = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
+const DEFAULT_RERANK_MODEL = "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf";
+const DEFAULT_GENERATE_MODEL = "hf:tobil/qmd-query-expansion-1.7B-gguf/qmd-query-expansion-1.7B-q4_k_m.gguf";
+```
 
-| Endpoint | Upstream | Usage |
-|----------|----------|-------|
-| `POST /memory/embed` | Gemini `gemini-embedding-2-preview` | 768-dim vectors, taskType-aware (RETRIEVAL_QUERY vs RETRIEVAL_DOCUMENT) |
-| `POST /memory/rerank` | ZeroEntropy `zerank-2` | Cross-encoder relevance scoring with retry/backoff |
+### EmbeddingGemma Prompt Format
 
-AQMD does not use a local generation model in the default `query` path. Plain queries are normalized into `lex:{query}` and `vec:{query}` before retrieval.
+```
+// For queries
+"task: search result | query: {query}"
+
+// For documents
+"title: {title} | text: {content}"
+```
+
+### Qwen3-Reranker
+
+Uses node-llama-cpp's `createRankingContext()` and `rankAndSort()` API for cross-encoder reranking. Returns documents sorted by relevance score (0.0 - 1.0).
+
+### Qwen3 (Query Expansion)
+
+Used for generating query variations via `LlamaChatSession`.
 
 ## License
 

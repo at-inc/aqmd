@@ -8,7 +8,6 @@
  * needs to change (one-line diff vs upstream QMD).
  *
  * @see https://browser-api.aside.at  (Aside API)
- * @see /Users/vista/projects/bro/apps/api/src/memory/schema.ts  (canonical schema)
  */
 
 import type { EmbeddingResult, EmbedOptions, RerankResult, RerankDocument, RerankDocumentResult } from "./llm.js";

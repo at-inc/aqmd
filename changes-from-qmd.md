@@ -32,8 +32,8 @@ Plain queries normalize to `lex:{query}` + `vec:{query}` without invoking a gene
 **Files:**
 - `src/store.ts` — `expandQuery()`, `hybridQuery()`, `vectorSearchQuery()` return deterministic lex+vec pair
 - `src/cli/qmd.ts` — `parseStructuredQuery()` maps plain input to lex+vec; `status`/`pull` don't reference generation model
-- `src/index.ts` — SDK `expandQuery()` aligned to lex+vec decomposition
 - `docs/SYNTAX.md` — Query grammar docs reflect AQMD behavior
+- `README.md` — intentionally kept close to upstream; points readers here for AQMD-specific behavior
 
 **Constraints:**
 - `expand:` prefix is accepted but maps to the same deterministic pair
@@ -41,6 +41,7 @@ Plain queries normalize to `lex:{query}` + `vec:{query}` without invoking a gene
 
 **Merge notes:**
 - Upstream changes to `expandQuery()` or `parseStructuredQuery()` must be re-evaluated — reapply deterministic routing if upstream reintroduces LLM expansion
+- Keep SDK `expandQuery()` delegating through `src/store.ts` so this divergence stays localized
 
 ---
 

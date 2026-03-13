@@ -23,7 +23,6 @@ import {
   structuredSearch,
   extractSnippet,
   addLineNumbers,
-  getDefaultExpandedQueries,
   DEFAULT_EMBED_MODEL,
   DEFAULT_MULTI_GET_MAX_BYTES,
   reindexCollection,
@@ -405,10 +404,7 @@ export async function createStore(options: StoreOptions): Promise<QMDStore> {
     },
     searchLex: async (q, opts) => internal.searchFTS(q, opts?.limit, opts?.collection),
     searchVector: async (q, opts) => internal.searchVec(q, DEFAULT_EMBED_MODEL, opts?.limit, opts?.collection),
-    expandQuery: async (q, opts) => {
-      void opts;
-      return getDefaultExpandedQueries(q);
-    },
+    expandQuery: async (q, opts) => internal.expandQuery(q, undefined, opts?.intent),
     get: async (pathOrDocid, opts) => internal.findDocument(pathOrDocid, opts),
     getDocumentBody: async (pathOrDocid, opts) => {
       const result = internal.findDocument(pathOrDocid, { includeBody: false });
