@@ -42,6 +42,7 @@ Plain queries normalize to `lex:{query}` + `vec:{query}` without invoking a gene
 **Merge notes:**
 - Upstream changes to `expandQuery()` or `parseStructuredQuery()` must be re-evaluated — reapply deterministic routing if upstream reintroduces LLM expansion
 - Keep SDK `expandQuery()` delegating through `src/store.ts` so this divergence stays localized
+- Keep CLI help/progress text close to upstream "query expansion" wording where possible; the behavior change lives in routing, not in AQMD-specific copy
 
 ---
 

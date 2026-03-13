@@ -1977,14 +1977,14 @@ function filterByCollections<T extends { filepath?: string; file?: string }>(res
 /**
  * Parse structured search query syntax.
  * Lines starting with lex:, vec:, or hyde: are routed directly.
- * Plain lines without prefix map to AQMD's default lex+vec query pair.
+ * Plain lines without prefix go through query expansion.
  * 
- * Returns null only for empty input.
+ * Returns null if this is a plain query (single line, no prefix).
  * Returns ExpandedQuery[] if structured syntax detected.
  * Throws if multiple plain lines (ambiguous).
  * 
  * Examples:
- *   "CAP theorem"                    -> { searches: [lex, vec] }
+ *   "CAP theorem"                    -> null (plain query, use expansion)
  *   "lex: CAP theorem"               -> [{ type: 'lex', query: 'CAP theorem' }]
  *   "lex: CAP\nvec: consistency"     -> [{ type: 'lex', ... }, { type: 'vec', ... }]
  *   "CAP\nconsistency"               -> throws (multiple plain lines)
@@ -2099,7 +2099,7 @@ function search(query: string, opts: OutputOptions): void {
   outputResults(resultsWithContext, query, opts);
 }
 
-// Log the default/structured query plan to stderr (CLI progress feedback)
+// Log query expansion as a tree to stderr (CLI progress feedback)
 function logExpansionTree(originalQuery: string, expanded: ExpandedQuery[]): void {
   const lines: string[] = [];
   lines.push(`${c.dim}├─ ${originalQuery}${c.reset}`);
@@ -2235,7 +2235,7 @@ async function querySearch(query: string, opts: OutputOptions, _embedModel: stri
         intent,
         hooks: {
           onExpandStart: () => {
-            process.stderr.write(`${c.dim}Preparing default lex+vec query pair...${c.reset}`);
+            process.stderr.write(`${c.dim}Expanding query...${c.reset}`);
           },
           onExpand: (original, expanded, ms) => {
             process.stderr.write(`${c.dim} (${formatMs(ms)})${c.reset}\n`);
@@ -2525,7 +2525,7 @@ function showHelp(): void {
   console.log("  qmd <command> [options]");
   console.log("");
   console.log("Primary commands:");
-  console.log("  qmd query <query>             - Hybrid search with implicit lex+vec + reranking (recommended)");
+  console.log("  qmd query <query>             - Hybrid search with auto expansion + reranking (recommended)");
   console.log("  qmd query 'lex:..\\nvec:...'   - Structured query document (you provide lex/vec/hyde lines)");
   console.log("  qmd search <query>            - Full-text BM25 keywords (no LLM)");
   console.log("  qmd vsearch <query>           - Vector similarity only");
@@ -2546,14 +2546,14 @@ function showHelp(): void {
   console.log("  qmd cleanup                   - Clear caches, vacuum DB");
   console.log("");
   console.log("Query syntax (qmd query):");
-  console.log("  QMD queries are either a single implicit query (mapped to lex:+vec:) or a");
-  console.log("  multi-line document where every line is typed with lex:, vec:, or hyde:. This grammar");
+  console.log("  QMD queries are either a single expand query (no prefix) or a multi-line");
+  console.log("  document where every line is typed with lex:, vec:, or hyde:. This grammar");
   console.log("  matches the docs in docs/SYNTAX.md and is enforced in the CLI.");
   console.log("");
   const grammar = [
-    `query          = implicit_query | query_document ;`,
-    `implicit_query = text | explicit_expand ;`,
-    `explicit_expand= "expand:" text ;  # compatibility alias; maps to lex+vec`,
+    `query          = expand_query | query_document ;`,
+    `expand_query   = text | explicit_expand ;`,
+    `explicit_expand= "expand:" text ;`,
     `query_document = [ intent_line ] { typed_line } ;`,
     `intent_line    = "intent:" text newline ;`,
     `typed_line     = type ":" text newline ;`,
@@ -2569,13 +2569,13 @@ function showHelp(): void {
   }
   console.log("");
   console.log("  Examples:");
-  console.log("    qmd query \"how does auth work\"                # single-line → implicit lex + vec");
+  console.log("    qmd query \"how does auth work\"                # single-line → implicit expand");
   console.log("    qmd query $'lex: CAP theorem\\nvec: consistency'  # typed query document");
   console.log("    qmd query $'lex: \"exact matches\" sports -baseball'  # phrase + negation lex search");
   console.log("    qmd query $'hyde: Hypothetical answer text'       # hyde-only document");
   console.log("");
   console.log("  Constraints:");
-  console.log("    - Standalone implicit/expand queries cannot mix with typed lines.");
+  console.log("    - Standalone expand queries cannot mix with typed lines.");
   console.log("    - Query documents allow only lex:, vec:, or hyde: prefixes.");
   console.log("    - Each typed line must be single-line text with balanced quotes.");
   console.log("");
