@@ -60,29 +60,35 @@ This file tracks all divergent changes from the [QMD](https://github.com/tobi/qm
 
 ---
 
-## Remote Embedding & Reranking Providers
+## Remote Embedding & Reranking via Aside API Proxy
 
-**Date:** 2026-03-06
+**Date:** 2026-03-12 (updated from 2026-03-06)
 **Files changed:**
-- `src/remote-providers.ts` (NEW) — Remote API clients for Gemini embedding and ZeroEntropy reranking
-- `src/llm.ts` (MODIFIED) — Added import and delegation hooks in `embed()`, `embedBatch()`, `rerank()`, `tokenize()`, `countTokens()`, `detokenize()`
+- `src/aside-api-client.ts` (NEW) — Aside API client for embedding and reranking via `https://browser-api.aside.at/memory/*`
+- `src/remote-providers.ts` (REWRITTEN) — Thin delegation layer; always enabled, delegates to aside-api-client
+- `src/llm.ts` (UNCHANGED from previous AQMD state) — Import and delegation hooks remain intact
+- `test/llm.test.ts` (MODIFIED) — Added `vi.mock` for remote-providers to keep unit tests exercising local-model code paths
 - `.gitignore` (MODIFIED) — Added `.env` and `!changes-from-qmd.md`
 
 **What changed:**
-- Replaced local `node-llama-cpp` embedding (embeddinggemma-300M) with remote Gemini `embedding-001` API
-- Replaced local `node-llama-cpp` reranking (qwen3-reranker-0.6b) with remote ZeroEntropy `zerank-2` API
+- All embedding and reranking now goes through Aside's proxy API (`browser-api.aside.at`)
+- **No API keys required** — Aside server handles upstream authentication to Gemini and ZeroEntropy
+- `isRemoteEmbeddingEnabled()` and `isRemoteRerankEnabled()` always return `true`
+- Local node-llama-cpp embedding/reranking models are never loaded (bypassed by remote check)
 - Query expansion still uses local model (qmd-query-expansion-1.7B)
-- Remote providers activate when environment variables are set; falls back to local models when unset
+- Optional `ASIDE_API_URL` env var overrides the default base URL
 
-**Environment variables required:**
-- `GOOGLE_GENERATIVE_AI_API_KEY` — Activates remote Gemini embedding (768 dimensions, taskType-aware)
-- `ZEROENTROPY_API_KEY` — Activates remote ZeroEntropy reranking
+**Environment variables:**
+- `ASIDE_API_URL` (optional) — Override API base URL (default: `https://browser-api.aside.at`)
+- `GOOGLE_GENERATIVE_AI_API_KEY` — No longer required (removed dependency)
+- `ZEROENTROPY_API_KEY` — No longer required (removed dependency)
 
 **Merge notes:**
-- `src/remote-providers.ts` is a new file — no merge conflicts expected
-- `src/llm.ts` changes are minimal (import + 3-line delegation blocks at top of 5 methods) — conflicts possible but easy to resolve
-- All AQMD-specific code is marked with `// AQMD:` comments for easy identification
-- `.gitignore` changes are additive only
+- `src/aside-api-client.ts` is a new file — no merge conflicts expected
+- `src/remote-providers.ts` is fully rewritten but keeps the same exports (`isRemoteEmbeddingEnabled`, `isRemoteRerankEnabled`, `remoteEmbed`, `remoteEmbedBatch`, `remoteRerank`); upstream changes to this file require manual re-merge
+- `src/llm.ts` has zero new changes in this update — no additional merge risk
+- `test/llm.test.ts` has a `vi.mock` block at the top; upstream test additions should merge cleanly below it
+- Original direct-API implementations preserved as comments in `remote-providers.ts` for reference
 
 ---
 
