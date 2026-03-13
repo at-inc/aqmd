@@ -7,6 +7,20 @@
 - AQMD: plain `qmd query` input no longer uses LLM query expansion. Implicit queries now normalize to `lex:{query}` plus `vec:{query}`, and the CLI no longer pulls or reports a local generation model for this path.
 - AQMD: temporarily vendor Homebrew `libsqlite3.dylib` for macOS package installs and point the runtime at it so bundled `sqlite-vec` can load without requiring users to run `brew install sqlite` separately.
 
+## [2.0.1] - 2026-03-10
+
+### Changes
+
+- `qmd skill install` copies the packaged QMD skill into
+  `~/.claude/commands/` for one-command setup. #355 (thanks @nibzard)
+
+### Fixes
+
+- Fix Qwen3-Embedding GGUF filename case — HuggingFace filenames are
+  case-sensitive, the lowercase variant returned 404. #349 (thanks @byheaven)
+- Resolve symlinked global launcher path so `qmd` works correctly when
+  installed via `npm i -g`. #352 (thanks @nibzard)
+
 ## [2.0.0] - 2026-03-10
 
 QMD 2.0 declares a stable library API. The SDK is now the primary interface —

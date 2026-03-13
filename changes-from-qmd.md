@@ -2,6 +2,30 @@
 
 This file tracks all divergent changes from the [QMD](https://github.com/tobi/qmd) upstream to minimize merge conflicts.
 
+## Upstream Merge: QMD v2.0.1
+
+**Date:** 2026-03-12
+**Upstream range:** `55f1646..ae3604c` (10 commits, tag v2.0.1)
+
+**Major upstream changes absorbed:**
+- **`qmd skill install`** (`src/cli/qmd.ts`, `src/embedded-skills.ts` NEW) — Installs packaged QMD skill into `.agents/skills/qmd` with optional `--global` and Claude symlink support
+- **Launcher symlink fix** (`bin/qmd`) — Resolves symlinked global launcher path for `npm i -g` installs
+- **BUN_INSTALL false positive fix** (`bin/qmd`) — Removes `$BUN_INSTALL` env check from runtime detection; only lock files determine bun vs node
+- **Qwen3-Embedding filename case fix** (`src/llm.ts`) — Corrected HuggingFace GGUF filename case (case-sensitive on HF)
+
+**Conflicts resolved:**
+- `CHANGELOG.md` — Kept AQMD unreleased entries above upstream v2.0.1 section
+- `bin/qmd` — Kept AQMD vendored SQLite block, adopted upstream's `$BUN_INSTALL` removal and symlink resolution. Removed duplicate `DIR=` line that conflicted with upstream's improved symlink-aware path resolution
+- `package.json` — Kept `aqmd` name, adopted upstream v2.0.1 version
+
+**AQMD hooks preserved (all still functional):**
+- `bin/qmd` vendored macOS SQLite env bootstrap ✓
+- `src/llm.ts` import of `./aside-api-client.js` + all remote delegation guards ✓
+- `src/store.ts` deterministic `lex + vec` query routing ✓
+- `src/cli/qmd.ts` AQMD query parsing (no LLM expansion) ✓
+
+---
+
 ## CRITICAL: Temporary Vendored macOS SQLite Runtime
 
 **Date:** 2026-03-12
