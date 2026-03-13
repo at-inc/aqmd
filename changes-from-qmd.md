@@ -2,6 +2,35 @@
 
 This file tracks all divergent changes from the [QMD](https://github.com/tobi/qmd) upstream to minimize merge conflicts.
 
+## CRITICAL: Temporary Vendored macOS SQLite Runtime
+
+**Date:** 2026-03-12
+**Files changed:**
+- `src/db.ts` (MODIFIED) — Added vendored macOS SQLite path resolution, `DYLD_*` environment bootstrapping, and Bun `Database.setCustomSQLite()` wiring before first database use
+- `bin/qmd` (MODIFIED) — Exports vendored macOS SQLite library path and prepends the vendored directory to `DYLD_LIBRARY_PATH` / `DYLD_FALLBACK_LIBRARY_PATH`
+- `package.json` (MODIFIED) — Includes `vendor/` in published package files so the vendored dylib ships with npm/bun installs
+- `vendor/macos/libsqlite3.dylib` (NEW) — Temporary vendored copy of Homebrew SQLite dylib from `/opt/homebrew/opt/sqlite/lib/libsqlite3.dylib`
+- `CHANGELOG.md` (MODIFIED) — Added unreleased note for the temporary vendored macOS SQLite runtime
+
+**What changed:**
+- AQMD now ships a temporary vendored macOS `libsqlite3.dylib` with the package
+- On macOS, the runtime resolves the vendored dylib automatically and exposes it via `AQMD_VENDORED_SQLITE_PATH`
+- Bun uses the vendored dylib via `Database.setCustomSQLite()` before the first `new Database()` call
+- The CLI wrapper also prepends the vendored dylib directory to `DYLD_LIBRARY_PATH` and `DYLD_FALLBACK_LIBRARY_PATH` for macOS launches
+
+**Why this is critical:**
+- This is an AQMD-only packaging/runtime divergence from upstream QMD
+- It changes macOS SQLite loading behavior to avoid asking end users to install Homebrew SQLite separately
+- Future upstream merges touching `src/db.ts`, `bin/qmd`, or package publishing rules must preserve or deliberately replace this vendored runtime behavior
+
+**Merge notes:**
+- `src/db.ts` divergence is localized to vendored macOS SQLite discovery and runtime setup helpers near module initialization
+- `bin/qmd` divergence is localized to the macOS env bootstrap block before runtime selection
+- `package.json` divergence is additive only (`vendor/` publish include)
+- `vendor/macos/libsqlite3.dylib` is intentionally temporary; if upstream adopts another macOS fix, remove or replace this asset deliberately
+
+---
+
 ## CRITICAL: Deterministic Plain Query Routing (No Expansion LLM)
 
 **Date:** 2026-03-12
