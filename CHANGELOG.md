@@ -2,10 +2,13 @@
 
 ## [Unreleased]
 
+## [2.0.2] - 2026-03-12
+
 ### Changes
 
 - AQMD: plain `qmd query` input no longer uses LLM query expansion. Implicit queries now normalize to `lex:{query}` plus `vec:{query}`, and the CLI no longer pulls or reports a local generation model for this path.
 - AQMD: temporarily vendor Homebrew `libsqlite3.dylib` for macOS package installs and point the runtime at it so bundled `sqlite-vec` can load without requiring users to run `brew install sqlite` separately.
+- AQMD: Node runtime now uses built-in `node:sqlite` instead of `better-sqlite3`, so `pnpm install -g @at-studio/aqmd` no longer depends on approving or compiling a native addon just to run basic commands.
 
 ## [2.0.1] - 2026-03-10
 

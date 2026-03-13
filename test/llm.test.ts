@@ -10,9 +10,17 @@
 import { describe, test, expect, beforeAll, afterAll, vi } from "vitest";
 
 // AQMD: mock remote providers so unit tests exercise local-model code paths
-vi.mock("../src/aside-api-client.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/aside-api-client.js")>();
-  return { ...actual, isRemoteRerankEnabled: () => false, isRemoteEmbeddingEnabled: () => false };
+vi.mock("../src/aside-api-client.js", async () => {
+  return {
+    isRemoteRerankEnabled: () => false,
+    isRemoteEmbeddingEnabled: () => false,
+    remoteEmbed: async () => null,
+    remoteEmbedBatch: async (texts: string[]) => texts.map(() => null),
+    remoteRerank: async (query: string, documents: { file: string }[]) => ({
+      results: documents.map((doc, index) => ({ file: doc.file, score: 0, index })),
+      model: "test-remote-rerank",
+    }),
+  };
 });
 
 import {

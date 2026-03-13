@@ -2,7 +2,7 @@
  * db.ts - Cross-runtime SQLite compatibility layer
  *
  * Provides a unified Database export that works under both Bun (bun:sqlite)
- * and Node.js (better-sqlite3). The APIs are nearly identical — the main
+ * and Node.js (node:sqlite). The APIs are nearly identical — the main
  * difference is the import path.
  */
 
@@ -19,6 +19,7 @@ const vendoredSQLiteRelativePath = "../vendor/macos/libsqlite3.dylib";
 
 let _Database: any;
 let _sqliteVecLoad: (db: any) => void;
+let _openDatabase: (path: string) => Database;
 
 function getVendoredSQLitePath(): string | null {
   const override = process.env.AQMD_VENDORED_SQLITE_PATH;
@@ -47,6 +48,7 @@ if (isBun) {
   // Dynamic string prevents tsc from resolving bun:sqlite on Node.js builds
   const bunSqlite = "bun:" + "sqlite";
   _Database = (await import(/* @vite-ignore */ bunSqlite)).Database;
+  _openDatabase = (path: string) => new _Database(path) as Database;
   const vendoredSQLitePath = prepareMacOSSQLiteRuntime();
   if (vendoredSQLitePath && typeof _Database.setCustomSQLite === "function") {
     _Database.setCustomSQLite(vendoredSQLitePath);
@@ -55,16 +57,17 @@ if (isBun) {
   _sqliteVecLoad = (db: any) => db.loadExtension(getLoadablePath());
 } else {
   prepareMacOSSQLiteRuntime();
-  _Database = (await import("better-sqlite3")).default;
+  _Database = (await import("node:sqlite")).DatabaseSync;
+  _openDatabase = (path: string) => new _Database(path, { allowExtension: true }) as Database;
   const sqliteVec = await import("sqlite-vec");
   _sqliteVecLoad = (db: any) => sqliteVec.load(db);
 }
 
 /**
- * Open a SQLite database. Works with both bun:sqlite and better-sqlite3.
+ * Open a SQLite database. Works with both bun:sqlite and node:sqlite.
  */
 export function openDatabase(path: string): Database {
-  return new _Database(path) as Database;
+  return _openDatabase(path);
 }
 
 /**

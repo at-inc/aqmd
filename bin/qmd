@@ -12,7 +12,7 @@ while [ -L "$SOURCE" ]; do
 done
 
 # Detect the runtime used to install this package and use the matching one
-# to avoid native module ABI mismatches (e.g., better-sqlite3 compiled for bun vs node)
+# to avoid runtime-specific SQLite/extension loading mismatches.
 DIR="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
 
 VENDORED_SQLITE="$DIR/vendor/macos/libsqlite3.dylib"
@@ -40,5 +40,5 @@ fi
 if [ -f "$DIR/bun.lock" ] || [ -f "$DIR/bun.lockb" ]; then
   exec bun "$DIR/dist/cli/qmd.js" "$@"
 else
-  exec node "$DIR/dist/cli/qmd.js" "$@"
+  exec node --disable-warning=ExperimentalWarning "$DIR/dist/cli/qmd.js" "$@"
 fi

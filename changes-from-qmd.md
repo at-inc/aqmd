@@ -11,7 +11,7 @@ All embedding and reranking is routed through Aside's proxy API (`browser-api.as
 **Files:**
 - `src/aside-api-client.ts` (NEW) — Single-file API client; exports `isRemoteEmbeddingEnabled`, `isRemoteRerankEnabled`, `remoteEmbed`, `remoteEmbedBatch`, `remoteRerank`
 - `src/llm.ts` (+25 lines) — 1 import line + 6 guard blocks that delegate to aside-api-client before local model code
-- `test/llm.test.ts` (+4 lines) — `vi.mock` to disable remote in unit tests
+- `test/llm.test.ts` (+4 lines) — `vi.mock`/`vi.importActual` to disable remote in unit tests
 
 **Constraints:**
 - `isRemoteEmbeddingEnabled()` / `isRemoteRerankEnabled()` always return `true`
@@ -61,6 +61,26 @@ AQMD ships a vendored `libsqlite3.dylib` so macOS users don't need Homebrew SQLi
 - `src/db.ts` divergence is near module initialization — localized
 - `bin/qmd` divergence is in the macOS env bootstrap block before runtime selection
 - If upstream adopts a different macOS SQLite fix, remove this vendored asset
+
+---
+
+## Node Runtime Uses Built-in SQLite
+
+AQMD uses Node's built-in `node:sqlite` runtime instead of `better-sqlite3`. This avoids `pnpm` native build approval failures on global installs while keeping the existing Bun path unchanged.
+
+**Files:**
+- `src/db.ts` — Node path imports `node:sqlite` and opens databases with `allowExtension: true` so `sqlite-vec` still loads
+- `bin/qmd` — Node launcher suppresses the `ExperimentalWarning` emitted by `node:sqlite`
+- `package.json` — removes `better-sqlite3` runtime dependency and related types
+
+**Constraints:**
+- Node runtime still requires Node 22+ because `node:sqlite` is only available there
+- `sqlite-vec` must keep loading through `DatabaseSync.loadExtension()` on Node
+- Bun runtime behavior stays unchanged; keep Node-specific logic isolated in `src/db.ts`
+
+**Merge notes:**
+- If upstream keeps `better-sqlite3`, prefer preserving AQMD's Node branch as a small localized divergence inside `src/db.ts`
+- Re-check `node:sqlite` API compatibility if upstream starts relying on APIs beyond `exec`, `prepare`, `loadExtension`, and `close`
 
 ---
 
