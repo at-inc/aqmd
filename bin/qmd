@@ -3,6 +3,22 @@
 # to avoid native module ABI mismatches (e.g., better-sqlite3 compiled for bun vs node)
 
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
+VENDORED_SQLITE="$DIR/vendor/macos/libsqlite3.dylib"
+
+if [ "$(uname -s)" = "Darwin" ] && [ -f "$VENDORED_SQLITE" ]; then
+  VENDORED_SQLITE_DIR="$(dirname "$VENDORED_SQLITE")"
+  export AQMD_VENDORED_SQLITE_PATH="$VENDORED_SQLITE"
+
+  case ":${DYLD_LIBRARY_PATH:-}:" in
+    *":$VENDORED_SQLITE_DIR:"*) ;;
+    *) export DYLD_LIBRARY_PATH="$VENDORED_SQLITE_DIR${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" ;;
+  esac
+
+  case ":${DYLD_FALLBACK_LIBRARY_PATH:-}:" in
+    *":$VENDORED_SQLITE_DIR:"*) ;;
+    *) export DYLD_FALLBACK_LIBRARY_PATH="$VENDORED_SQLITE_DIR${DYLD_FALLBACK_LIBRARY_PATH:+:$DYLD_FALLBACK_LIBRARY_PATH}" ;;
+  esac
+fi
 
 # Check if we were installed with bun (look for bun.lock or bun-lockb)
 if [ -f "$DIR/bun.lock" ] || [ -f "$DIR/bun.lockb" ] || [ -n "$BUN_INSTALL" ]; then
