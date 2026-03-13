@@ -4,7 +4,7 @@
 
 An on-device search engine for everything you need to remember. Index your markdown notes, meeting transcripts, documentation, and knowledge bases. Search with keywords or natural language. Ideal for your agentic flows.
 
-AQMD combines BM25 full-text search, vector semantic search, and LLM re-ranking. It supports both **local GGUF models** (via node-llama-cpp) and **remote API providers** (Gemini embedding + ZeroEntropy reranking), selected via environment variables.
+AQMD combines BM25 full-text search, vector semantic search, and LLM re-ranking. Embedding and reranking run through Aside's API proxy (`browser-api.aside.at`) — no API keys required.
 
 ![QMD Architecture](assets/qmd-architecture.png)
 
@@ -417,8 +417,8 @@ The SDK requires explicit `dbPath` — no defaults are assumed. This makes it sa
                                       ▼
                           ┌───────────────────────┐
                           │    LLM Re-ranking     │
-                          │ (local qwen3-reranker │
-                          │  or ZeroEntropy API)  │
+                          │   (Aside API proxy)   │
+                          │                       │
                           └───────────┬───────────┘
                                       │
                                       ▼
@@ -477,40 +477,16 @@ The `query` command uses **Reciprocal Rank Fusion (RRF)** with position-aware bl
   brew install sqlite
   ```
 
-### GGUF Models (via node-llama-cpp)
+### Remote Models (via Aside API)
 
-When using **local models** (default, no env vars set), AQMD uses two GGUF models (auto-downloaded on first use):
+AQMD routes all embedding and reranking through Aside's API proxy. No API keys are needed — the server handles upstream authentication.
 
-| Model | Purpose | Size | Remote Alternative |
-|-------|---------|------|--------------------|
-| `embeddinggemma-300M-Q8_0` | Vector embeddings (default) | ~300MB | Gemini `embedding-001` |
-| `qwen3-reranker-0.6b-q8_0` | Re-ranking | ~640MB | ZeroEntropy `zerank-2` |
+| Function | Upstream Provider | Model | Dimensions |
+|----------|-------------------|-------|------------|
+| Embedding | Gemini | `gemini-embedding-2-preview` | 768 |
+| Reranking | ZeroEntropy | `zerank-2` | — |
 
-Models are downloaded from HuggingFace and cached in `~/.cache/qmd/models/`.
-
-> **Remote mode**: When `GOOGLE_GENERATIVE_AI_API_KEY` and/or `ZEROENTROPY_API_KEY` are set, the corresponding remote providers are used instead. The local embedding and reranking models are not downloaded or loaded.
-
-### Custom Embedding Model
-
-Override the default embedding model via the `QMD_EMBED_MODEL` environment variable.
-This is useful for multilingual corpora (e.g. Chinese, Japanese, Korean) where
-`embeddinggemma-300M` has limited coverage.
-
-```sh
-# Use Qwen3-Embedding-0.6B for better multilingual (CJK) support
-export QMD_EMBED_MODEL="hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf"
-
-# After changing the model, re-embed all collections:
-qmd embed -f
-```
-
-Supported model families:
-- **embeddinggemma** (default) — English-optimized, small footprint
-- **Qwen3-Embedding** — Multilingual (119 languages including CJK), MTEB top-ranked
-
-> **Note:** When switching embedding models, you must re-index with `qmd embed -f`
-> since vectors are not cross-compatible between models. The prompt format is
-> automatically adjusted for each model family.
+Local GGUF models (embeddinggemma, qwen3-reranker) are never downloaded or loaded. Tokenization uses a character-based approximation (4 chars ≈ 1 token).
 
 ## Installation
 
@@ -747,11 +723,8 @@ llm_cache       -- Cached query plans and rerank scores
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GOOGLE_GENERATIVE_AI_API_KEY` | *(unset)* | Gemini API key — enables remote embedding via `embedding-001` (768 dimensions) |
-| `ZEROENTROPY_API_KEY` | *(unset)* | ZeroEntropy API key — enables remote reranking via `zerank-2` |
+| `ASIDE_API_URL` | `https://browser-api.aside.at` | Aside API base URL (embedding + reranking proxy) |
 | `XDG_CACHE_HOME` | `~/.cache` | Cache directory location |
-
-When remote API keys are set, the corresponding local GGUF models are bypassed entirely. You can set one or both — they activate independently.
 
 ## How It Works
 
@@ -775,8 +748,8 @@ Collection ──► Glob Pattern ──► Markdown Files ──► Parse Title
 Documents are chunked into ~900-token pieces with 15% overlap using smart boundary detection:
 
 ```
-Document ──► Smart Chunk (~900 tokens) ──► Format each chunk ──► Embed Provider ──► Store Vectors
-                │                           "title | text"       (local or Gemini)
+Document ──► Smart Chunk (~900 tokens) ──► Format each chunk ──► Aside API  ──► Store Vectors
+                │                           "title | text"       (Gemini proxy)
                 │
                 └─► Chunks stored with:
                     - hash: document hash
@@ -855,41 +828,16 @@ Query ──► LLM Expansion ──► [Original, Variant 1, Variant 2]
 
 ## Model Configuration
 
-### Local Models (default)
+### Aside API (AQMD default)
 
-Models are configured in `src/llm.ts` as HuggingFace URIs:
+All embedding and reranking is handled by `src/aside-api-client.ts`, which calls Aside's proxy API. No local GGUF models are loaded for embedding or reranking.
 
-```typescript
-const DEFAULT_EMBED_MODEL = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
-const DEFAULT_RERANK_MODEL = "hf:ggml-org/Qwen3-Reranker-0.6B-Q8_0-GGUF/qwen3-reranker-0.6b-q8_0.gguf";
-```
-
-#### EmbeddingGemma Prompt Format
-
-```
-// For queries
-"task: search result | query: {query}"
-
-// For documents
-"title: {title} | text: {content}"
-```
-
-#### Qwen3-Reranker
-
-Uses node-llama-cpp's `createRankingContext()` and `rankAndSort()` API for cross-encoder reranking. Returns documents sorted by relevance score (0.0 - 1.0).
+| Endpoint | Upstream | Usage |
+|----------|----------|-------|
+| `POST /memory/embed` | Gemini `gemini-embedding-2-preview` | 768-dim vectors, taskType-aware (RETRIEVAL_QUERY vs RETRIEVAL_DOCUMENT) |
+| `POST /memory/rerank` | ZeroEntropy `zerank-2` | Cross-encoder relevance scoring with retry/backoff |
 
 AQMD does not use a local generation model in the default `query` path. Plain queries are normalized into `lex:{query}` and `vec:{query}` before retrieval.
-
-### Remote Providers (AQMD)
-
-Remote API providers are defined in `src/remote-providers.ts` and activated by environment variables. See [changes-from-qmd.md](changes-from-qmd.md) for full details.
-
-| Provider | Model | Env Variable | Notes |
-|----------|-------|-------------|-------|
-| **Gemini** | `embedding-001` | `GOOGLE_GENERATIVE_AI_API_KEY` | 768 dimensions, taskType-aware (RETRIEVAL_QUERY vs RETRIEVAL_DOCUMENT) |
-| **ZeroEntropy** | `zerank-2` | `ZEROENTROPY_API_KEY` | Cross-encoder reranking with retry/backoff |
-
-When a remote provider is active, its local counterpart is not loaded. Tokenization falls back to a character-based approximation (4 chars ≈ 1 token) to avoid loading the local embedding model.
 
 ## License
 
