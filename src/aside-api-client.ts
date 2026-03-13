@@ -1,78 +1,102 @@
 /**
- * aside-api-client.ts - Aside API client for embedding and reranking
+ * aside-api-client.ts — AQMD remote embedding & reranking via Aside API
  *
- * AQMD divergence: replaces direct Gemini/ZeroEntropy API calls with
- * Aside's proxy API at https://browser-api.aside.at/memory/*
- * No API keys required — the server handles authentication.
+ * Replaces direct Gemini / ZeroEntropy calls with Aside's proxy API.
+ * No API keys required — the server handles upstream auth.
  *
- * Endpoints:
- *   POST /memory/embed   — Gemini embedding proxy (768 dimensions)
- *   POST /memory/rerank  — ZeroEntropy reranking proxy
+ * Exports the same symbols that llm.ts imports so only the import path
+ * needs to change (one-line diff vs upstream QMD).
+ *
+ * @see https://browser-api.aside.at  (Aside API)
+ * @see /Users/vista/projects/bro/apps/api/src/memory/schema.ts  (canonical schema)
  */
 
 import type { EmbeddingResult, EmbedOptions, RerankResult, RerankDocument, RerankDocumentResult } from "./llm.js";
 
-const BASE_URL = process.env.ASIDE_API_URL ?? "https://browser-api.aside.at";
-const EMBED_URL = `${BASE_URL}/memory/embed`;
-const RERANK_URL = `${BASE_URL}/memory/rerank`;
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
 
-const EMBED_DIMENSIONS = 768;
-const EMBED_MODEL = "aside/gemini-embedding";
+const BASE_URL = process.env.ASIDE_API_URL ?? "https://browser-api.aside.at";
+
+// Matches Aside API schema: embedRequestSchema.outputDimensionality
+const EMBED_DIMENSIONS: 768 | 1536 | 2048 = 768;
+const EMBED_MODEL = "aside/gemini-embedding-2-preview";
 const RERANK_MODEL = "aside/zerank-2";
+
+// Aside API schema: embedRequestSchema.taskType
+type TaskType = "RETRIEVAL_QUERY" | "RETRIEVAL_DOCUMENT";
+
+// Gemini batchEmbedContents hard limit
 const BATCH_LIMIT = 100;
 
 const MAX_RETRIES = 3;
-const INITIAL_BACKOFF_MS = 500;
+const BACKOFF_MS = 500;
 
-// =============================================================================
-// Retry helper
-// =============================================================================
+// ---------------------------------------------------------------------------
+// Detection — always enabled (Aside API has no client-side keys)
+// ---------------------------------------------------------------------------
 
-async function fetchRetry(url: string, init: RequestInit, retries = MAX_RETRIES): Promise<Response> {
+export function isRemoteEmbeddingEnabled(): boolean {
+  return true;
+}
+
+export function isRemoteRerankEnabled(): boolean {
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Fetch with retry + exponential backoff
+// ---------------------------------------------------------------------------
+
+async function post<T>(path: string, body: unknown): Promise<T> {
+  const url = `${BASE_URL}${path}`;
   let lastErr: Error | null = null;
-  for (let i = 0; i <= retries; i++) {
+
+  for (let i = 0; i <= MAX_RETRIES; i++) {
     try {
-      const res = await fetch(url, init);
-      if (res.ok) return res;
-      if (res.status === 429 && i < retries) {
-        await new Promise(r => setTimeout(r, INITIAL_BACKOFF_MS * 2 ** i));
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) return (await res.json()) as T;
+      if (res.status === 429 && i < MAX_RETRIES) {
+        await sleep(BACKOFF_MS * 2 ** i);
         continue;
       }
-      const body = await res.text().catch(() => "");
-      throw new Error(`HTTP ${res.status} ${url}: ${body.slice(0, 300)}`);
+      const text = await res.text().catch(() => "");
+      throw new Error(`${res.status} ${path}: ${text.slice(0, 300)}`);
     } catch (e) {
       lastErr = e instanceof Error ? e : new Error(String(e));
-      if (i < retries) {
-        await new Promise(r => setTimeout(r, INITIAL_BACKOFF_MS * 2 ** i));
-      }
+      if (i < MAX_RETRIES) await sleep(BACKOFF_MS * 2 ** i);
     }
   }
   throw lastErr!;
 }
 
-// =============================================================================
-// Embedding
-// =============================================================================
+const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
-export async function asideEmbed(text: string, options?: EmbedOptions): Promise<EmbeddingResult | null> {
-  const taskType = options?.isQuery ? "RETRIEVAL_QUERY" : "RETRIEVAL_DOCUMENT";
+// ---------------------------------------------------------------------------
+// Embed  (Aside schema: embedRequestSchema / embedResponseSchema)
+// ---------------------------------------------------------------------------
+
+type EmbedResponse = { embeddings: number[][] };
+
+export async function remoteEmbed(text: string, options?: EmbedOptions): Promise<EmbeddingResult | null> {
+  const taskType: TaskType = options?.isQuery ? "RETRIEVAL_QUERY" : "RETRIEVAL_DOCUMENT";
+  // Aside schema: title improves quality for RETRIEVAL_DOCUMENT
+  const title = (!options?.isQuery && options?.title) ? options.title : undefined;
+
   try {
-    const res = await fetchRetry(EMBED_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text }] }],
-        taskType,
-        title: options?.title,
-        outputDimensionality: EMBED_DIMENSIONS,
-      }),
+    const { embeddings } = await post<EmbedResponse>("/memory/embed", {
+      contents: [{ parts: [{ text }] }],
+      taskType,
+      title,
+      outputDimensionality: EMBED_DIMENSIONS,
     });
-    const data = (await res.json()) as { embeddings?: number[][] };
-    const vec = data.embeddings?.[0];
-    if (!vec) {
-      console.error("Aside embed: no vector in response");
-      return null;
-    }
+    const vec = embeddings?.[0];
+    if (!vec) return null;
     return { embedding: vec, model: EMBED_MODEL };
   } catch (e) {
     console.error("Aside embed error:", e);
@@ -80,66 +104,59 @@ export async function asideEmbed(text: string, options?: EmbedOptions): Promise<
   }
 }
 
-export async function asideEmbedBatch(texts: string[]): Promise<(EmbeddingResult | null)[]> {
-  if (texts.length === 0) return [];
+export async function remoteEmbedBatch(texts: string[]): Promise<(EmbeddingResult | null)[]> {
+  if (!texts.length) return [];
 
-  const all: (EmbeddingResult | null)[] = [];
+  const results: (EmbeddingResult | null)[] = [];
 
   for (let i = 0; i < texts.length; i += BATCH_LIMIT) {
     const batch = texts.slice(i, i + BATCH_LIMIT);
     try {
-      const res = await fetchRetry(EMBED_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: batch.map(t => ({ parts: [{ text: t }] })),
-          taskType: "RETRIEVAL_DOCUMENT",
-          outputDimensionality: EMBED_DIMENSIONS,
-        }),
+      const { embeddings } = await post<EmbedResponse>("/memory/embed", {
+        contents: batch.map(t => ({ parts: [{ text: t }] })),
+        taskType: "RETRIEVAL_DOCUMENT" satisfies TaskType,
+        outputDimensionality: EMBED_DIMENSIONS,
       });
-      const data = (await res.json()) as { embeddings?: number[][] };
-      const vecs = data.embeddings ?? [];
       for (let j = 0; j < batch.length; j++) {
-        const v = vecs[j];
-        all.push(v ? { embedding: v, model: EMBED_MODEL } : null);
+        const vec = embeddings?.[j];
+        results.push(vec ? { embedding: vec, model: EMBED_MODEL } : null);
       }
     } catch (e) {
       console.error("Aside embedBatch error:", e);
-      for (let j = 0; j < batch.length; j++) all.push(null);
+      for (let j = 0; j < batch.length; j++) results.push(null);
     }
   }
-  return all;
+  return results;
 }
 
-// =============================================================================
-// Reranking
-// =============================================================================
+// ---------------------------------------------------------------------------
+// Rerank  (Aside schema: rerankRequestSchema / rerankResponseSchema)
+// ---------------------------------------------------------------------------
 
-export async function asideRerank(query: string, documents: RerankDocument[]): Promise<RerankResult> {
-  if (documents.length === 0) return { results: [], model: RERANK_MODEL };
+type RerankResponse = { results: { index: number; relevance_score: number }[] };
+
+const zeroScores = (docs: RerankDocument[]): RerankResult => ({
+  results: docs.map((d, i) => ({ file: d.file, score: 0, index: i })),
+  model: RERANK_MODEL,
+});
+
+export async function remoteRerank(query: string, documents: RerankDocument[]): Promise<RerankResult> {
+  if (!documents.length) return { results: [], model: RERANK_MODEL };
 
   try {
-    const res = await fetchRetry(RERANK_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        query,
-        documents: documents.map(d => d.text),
-      }),
+    const { results: raw } = await post<RerankResponse>("/memory/rerank", {
+      query,
+      documents: documents.map(d => d.text),
     });
-    const data = (await res.json()) as { results?: { index: number; relevance_score: number }[] };
-    if (!data.results) {
-      console.error("Aside rerank: no results in response");
-      return { results: documents.map((d, i) => ({ file: d.file, score: 0, index: i })), model: RERANK_MODEL };
-    }
+    if (!raw) return zeroScores(documents);
 
-    const results: RerankDocumentResult[] = data.results.map(r => ({
+    const results: RerankDocumentResult[] = raw.map(r => ({
       file: documents[r.index]!.file,
       score: r.relevance_score,
       index: r.index,
     }));
 
-    // Fill missing indices with score 0
+    // backfill docs the API omitted (e.g. when top_n < total)
     if (results.length < documents.length) {
       const seen = new Set(results.map(r => r.index));
       for (let i = 0; i < documents.length; i++) {
@@ -149,6 +166,6 @@ export async function asideRerank(query: string, documents: RerankDocument[]): P
     return { results, model: RERANK_MODEL };
   } catch (e) {
     console.error("Aside rerank error:", e);
-    return { results: documents.map((d, i) => ({ file: d.file, score: 0, index: i })), model: RERANK_MODEL };
+    return zeroScores(documents);
   }
 }

@@ -64,18 +64,19 @@ This file tracks all divergent changes from the [QMD](https://github.com/tobi/qm
 
 **Date:** 2026-03-12 (updated from 2026-03-06)
 **Files changed:**
-- `src/aside-api-client.ts` (NEW) — Aside API client for embedding and reranking via `https://browser-api.aside.at/memory/*`
-- `src/remote-providers.ts` (REWRITTEN) — Thin delegation layer; always enabled, delegates to aside-api-client
-- `src/llm.ts` (UNCHANGED from previous AQMD state) — Import and delegation hooks remain intact
-- `test/llm.test.ts` (MODIFIED) — Added `vi.mock` for remote-providers to keep unit tests exercising local-model code paths
+- `src/aside-api-client.ts` (NEW) — Single-file Aside API client for embedding and reranking; exports the same symbols that upstream `remote-providers.ts` did
+- `src/remote-providers.ts` (DELETED) — Replaced by `aside-api-client.ts`; no longer exists
+- `src/llm.ts` (MODIFIED, 1-line diff) — Import path changed from `./remote-providers.js` to `./aside-api-client.js`
+- `test/llm.test.ts` (MODIFIED) — Added `vi.mock` for aside-api-client to keep unit tests exercising local-model code paths
 - `.gitignore` (MODIFIED) — Added `.env` and `!changes-from-qmd.md`
 
 **What changed:**
-- All embedding and reranking now goes through Aside's proxy API (`browser-api.aside.at`)
-- **No API keys required** — Aside server handles upstream authentication to Gemini and ZeroEntropy
+- All embedding and reranking goes through Aside's proxy API (`browser-api.aside.at/memory/*`)
+- **No API keys required** — Aside server handles upstream Gemini / ZeroEntropy authentication
 - `isRemoteEmbeddingEnabled()` and `isRemoteRerankEnabled()` always return `true`
-- Local node-llama-cpp embedding/reranking models are never loaded (bypassed by remote check)
+- Local node-llama-cpp embedding/reranking models are never loaded (bypassed by remote guard in `llm.ts`)
 - Query expansion still uses local model (qmd-query-expansion-1.7B)
+- Uses Aside API schema: `taskType` enum, `title` for RETRIEVAL_DOCUMENT quality boost, `outputDimensionality: 768`
 - Optional `ASIDE_API_URL` env var overrides the default base URL
 
 **Environment variables:**
@@ -85,10 +86,9 @@ This file tracks all divergent changes from the [QMD](https://github.com/tobi/qm
 
 **Merge notes:**
 - `src/aside-api-client.ts` is a new file — no merge conflicts expected
-- `src/remote-providers.ts` is fully rewritten but keeps the same exports (`isRemoteEmbeddingEnabled`, `isRemoteRerankEnabled`, `remoteEmbed`, `remoteEmbedBatch`, `remoteRerank`); upstream changes to this file require manual re-merge
-- `src/llm.ts` has zero new changes in this update — no additional merge risk
-- `test/llm.test.ts` has a `vi.mock` block at the top; upstream test additions should merge cleanly below it
-- Original direct-API implementations preserved as comments in `remote-providers.ts` for reference
+- `src/remote-providers.ts` was AQMD-only; if upstream adds this file, it won't conflict
+- `src/llm.ts` divergence is 1 import line + 6 guard blocks (25 lines total); guard blocks are identical to previous AQMD state so only the import line is new conflict surface
+- `test/llm.test.ts` has a `vi.mock` block at the top; upstream test additions merge cleanly below
 
 ---
 

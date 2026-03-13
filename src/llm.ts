@@ -23,7 +23,7 @@ import {
   remoteEmbed,
   remoteEmbedBatch,
   remoteRerank,
-} from "./remote-providers.js";
+} from "./aside-api-client.js";
 
 // =============================================================================
 // Embedding Formatting Functions
